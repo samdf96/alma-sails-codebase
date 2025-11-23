@@ -11,6 +11,9 @@ DATASETS_DIR = PROJECT_ROOT / "datasets"
 SRDP_WEBLOG_DIR = PROJECT_ROOT / "SRDP_weblogs"
 CONFIG_DIR = PROJECT_ROOT / "config"
 
+# CASA Image to use for processing
+CASA_IMAGE = "images.canfar.net/casa-6/casa:6.6.4-34"
+
 if __name__ == "__main__":
 
     print(f"PROJECT ROOT SET AS: {PROJECT_ROOT}")
