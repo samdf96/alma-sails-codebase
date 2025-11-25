@@ -1,7 +1,7 @@
 from pathlib import Path
 
 # Root directory of the project (ALMA-SAILS/)
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # Central database location
 DB_PATH = PROJECT_ROOT / "db" / "serpens_main.db"
