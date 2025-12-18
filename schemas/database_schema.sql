@@ -25,9 +25,8 @@ CREATE TABLE projects (
 CREATE TABLE mous (
     mous_id TEXT PRIMARY KEY,
     project_code TEXT REFERENCES projects(project_code),
-    obs_id TEXT,
-    asdm_uid TEXT,
     group_ous_uid TEXT,
+    num_asdms TEXT,
     obs_collection TEXT,
     collections TEXT,
     obs_publisher_did TEXT,
@@ -54,11 +53,11 @@ CREATE TABLE mous (
 -- TARGET METADATA
 -- ===============================
 
-
 CREATE TABLE targets (
     target_id INTEGER PRIMARY KEY AUTOINCREMENT,
     mous_id TEXT REFERENCES mous(mous_id),
     alma_source_name TEXT,
+    obs_id TEXT,
     ra_deg REAL,
     dec_deg REAL,
     gal_longitude REAL,
@@ -78,6 +77,7 @@ CREATE TABLE targets (
     em_res_power REAL,
     em_xel INTEGER,
     pwv REAL,
+    asdm_uid TEXT,
     cont_sens_bandwidth REAL,
     line_sens_10kms REAL,
     line_sens_native REAL,
@@ -112,8 +112,8 @@ CREATE TABLE pipeline_state (
 
     -- High-level pipeline stages
     download_status TEXT DEFAULT 'pending',       -- pending | in_progress | complete | error
-    pre_selfcal_split_status TEXT DEFAULT 'pending'
-    pre_selfcal_listobs_status TEXT DEFAULT 'pending'
+    pre_selfcal_split_status TEXT DEFAULT 'pending',
+    pre_selfcal_listobs_status TEXT DEFAULT 'pending',
     selfcal_status TEXT DEFAULT 'pending',
     imaging_status TEXT DEFAULT 'pending',
     cleanup_status TEXT DEFAULT 'pending',
@@ -131,9 +131,9 @@ CREATE TABLE pipeline_state (
     -- File paths useful even after cleanup cuts storage
     mous_directory TEXT DEFAULT '[]',               -- the top of the mous-specific directory
     calibrated_products TEXT DEFAULT '[]',          -- where the downloaded calibrated data landed
-    split_products_path TEXT DEFAULT '[]'.          -- list of split products
-    selfcal_products_nonsub_path TEXT DEFAULT '[]'  -- list of selfcalibrated products (non continuum subtracted)
-    selfcal_products_sub_path TEXT DEFAULT '[]'     -- list of selfcalibrated products (continuum subtracted)
+    split_products_path TEXT DEFAULT '[]',          -- list of split products
+    selfcal_products_nonsub_path TEXT DEFAULT '[]', -- list of selfcalibrated products (non continuum subtracted)
+    selfcal_products_sub_path TEXT DEFAULT '[]',    -- list of selfcalibrated products (continuum subtracted)
     final_imaging_products_path TEXT DEFAULT '[]',  -- location of final maps/cubes                    -- store useful logs for debugging
 
     -- Cleanup notes or deletion records
