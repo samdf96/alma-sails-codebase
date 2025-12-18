@@ -122,3 +122,13 @@ sshfs \
   [username]@ws-uv.canfar.net:/ \
   /home/ubuntu/canfar_arc
 ```
+
+### Authentication Setup (For the Prefect Server)
+
+The Python API- or CLI-based infrastructure to launch headless sessions for CANFAR's Kueue system needs authentication (see [canfar](https://github.com/opencadc/canfar)). If these headless sessions are launched from any CANFAR environment, the authentication is taken care of by the session itself (since users need to login to launch interactive sessions from the portal). If outside the session, one needs to run the following:
+
+```bash
+canfar auth login
+```
+
+The use of the `--force` flag may need to be added to force authentication. Choosing the CADC is the correct option, and login via CANFAR credentials will be brought up. This is necessary for Prefect to be able to launch jobs from the VM.
