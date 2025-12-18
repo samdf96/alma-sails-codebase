@@ -1,0 +1,59 @@
+# Welcome to your prefect.yaml file! You can use this file for storing and managing
+# configuration for deploying your flows. We recommend committing this file to source
+# control along with your flow code.
+
+# Generic metadata about this project
+name: alma-sails-flows
+prefect-version: 3.6.4
+
+# build section allows you to manage and build docker images
+build: null
+
+# push section allows you to manage if and how this project is uploaded to remote locations
+push: null
+
+# pull section allows you to provide instructions for cloning this project in remote locations
+pull:
+- prefect.deployments.steps.set_working_directory:
+    directory: /home/ubuntu/canfar_arc/projects/ALMA-SAILS/alma-sails-codebase/flows
+
+# the deployments section allows you to provide configuration for deploying flows
+deployments:
+- name: tester-script
+  version: null
+  tags: []
+  description: null
+  schedule: {}
+  flow_name: null
+  entrypoint: test_script.py:data_pipeline
+  parameters: {}
+  work_pool:
+    name: test-pool
+    work_queue_name: null
+    job_variables: {}
+
+- name: pipeline-state-monitoring-schedule
+  version: null
+  tags: []
+  description: null
+  schedule: {}
+  flow_name: null
+  entrypoint: pipeline_state_monitor.py:database_monitor_flow
+  parameters: {}
+  work_pool:
+    name: pipeline-state-monitoring
+    work_queue_name: null
+    job_variables: {}
+
+- name: mous-downloader
+  version: null
+  tags: []
+  description: null
+  schedule: {}
+  flow_name: null
+  entrypoint: mous_download.py:download_mous_flow
+  parameters: {}
+  work_pool:
+    name: headless-runs
+    work_queue_name: null
+    job_variables: {}

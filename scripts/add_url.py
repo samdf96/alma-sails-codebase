@@ -11,32 +11,33 @@ This will:
   • Normalize the MOUS ID (uid___ → uid:// form)
   • Verify the MOUS exists
   • Update the download_url field
-  • Reset downloaded state to "no"
 """
 
 # ---------------------------------------------------------------------
 # Bootstrap path so imports work when running from scripts/
 # ---------------------------------------------------------------------
 from bootstrap import setup_path
+
 setup_path()
 
 # ---------------------------------------------------------------------
 # Standard imports
 # ---------------------------------------------------------------------
-import argparse
-from datetime import datetime
+import argparse  # noqa: E402
+from datetime import datetime  # noqa: E402
+
+from alma_ops.config import DB_PATH  # noqa: E402
+from alma_ops.db import (  # noqa: E402
+    db_execute,
+    get_db_connection,
+    get_pipeline_state_record,
+)
 
 # ---------------------------------------------------------------------
 # Alma Ops imports
 # ---------------------------------------------------------------------
-from alma_ops.logging import get_logger
-from alma_ops.config import DB_PATH
-from alma_ops.utils import to_db_mous_id
-from alma_ops.db import (
-    get_db_connection,
-    get_mous_record,
-    db_execute,
-)
+from alma_ops.logging import get_logger  # noqa: E402
+from alma_ops.utils import to_db_mous_id  # noqa: E402
 
 # ---------------------------------------------------------------------
 # Logger
@@ -82,7 +83,7 @@ def main():
     with get_db_connection(args.db_path) as conn:
 
         # Ensure MOUS exists
-        record = get_mous_record(conn, normalized)
+        record = get_pipeline_state_record(conn, normalized)
         if record is None:
             log.error(f"No MOUS found matching ID: {normalized}")
             return
@@ -96,25 +97,18 @@ def main():
         db_execute(
             conn,
             """
-            UPDATE mous
-            SET download_url=?,
-                downloaded='no',
-                download_date=?,
-                download_path=NULL,
-                download_notes=?
+            UPDATE pipeline_state
+            SET download_url=?
             WHERE mous_id=?
             """,
             params=(
                 args.download_url,
-                timestamp,
-                note,
                 normalized,
             ),
             commit=True,
         )
 
         log.info(f"✅ Updated download URL for {normalized}")
-        log.info(f"   → {args.download_url}")
 
 
 # =====================================================================
