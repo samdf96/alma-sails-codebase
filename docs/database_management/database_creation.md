@@ -1,6 +1,6 @@
 ## Creating the SQLite Database
 
-First create a database in the `project-space/db` directory, using the schema provided in this codebase at the following location: [database_schema.sql](../master/schemas/database_schema.sql).
+First create a database in the `project-space/db` directory, using the schema provided in this codebase at the following location: [database_schema.sql](../../schemas/database_schema.sql).
 
 ```bash
 cd project-space
@@ -9,4 +9,4 @@ cd db
 sqlite3 database_name.db < ./path_to/database_schema.sql
 ```
 
-Then running the script [db_populate.py](../master/scripts/db_populate.py) will fill the database with the appropriate metadata from the CSV file passed in.
+The appropriate metadata can be in-filled by running the [db_populate_metadata.py](../../scripts/db_populate_metadata.py). To in-fill the expected number of asdm's that each MOUS contains, run the [db_populate_num_asdms.py](../../scripts/db_populate_num_asdms.py).

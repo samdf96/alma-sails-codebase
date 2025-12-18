@@ -14,26 +14,26 @@ The `database.db` file contains both raw metadata added from an ALMiner query, a
 
 In addition to the tables created to hold the metadata of the ALMA targets, there is also an addition table to track all stages of data processing called `pipeline_state`. This has tracking information such as:
 
-* download_url
-* download_status
-* pre_selfcal_split_status
-* pre_selfcal_listobs_status
-* selfcal_status
-* imaging_status
-* cleanup_status
+* `download_url`
+* `download_status`
+* `pre_selfcal_split_status`
+* `pre_selfcal_listobs_status`
+* `selfcal_status`
+* `imaging_status`
+* `cleanup_status`
 
 These columns above are checked by the Prefect runner to get the current state of the pipeline for each `mous_id` in the `pipeline_state` table. The values that can be set are the following:
 
-* pending : the default state
-* in_progress : when jobs are launched, this entry prevents multiple identical flows (in addition to a Prefect-specific check by the worker)
-* complete : marks the state as complete
-* error : marks any potential failures by the flow
+* `pending` : the default state
+* `in_progress` : when jobs are launched, this entry prevents multiple identical flows (in addition to a Prefect-specific check by the worker)
+* `complete` : marks the state as complete
+* `error` : marks any potential failures by the flow
 
 Additionally, there are also columns to hold the useful filepaths that are written by the pipeline throughout its major steps. These include:
 
-* mous_directory: the top of the mous-specific directory
-* calibrated_products : where the raw data landed from downloading
-* split_products_path : locations of the split data products
-* selfcal_products_nonsub_path : list of self calibrated products (non continuum subtracted)
-* selfcal_products_sub_path : list of self calibrated products (continuum subtracted)
-* final_imaging_products_path : list of final maps/cubes
+* `mous_directory`: the top of the mous-specific directory
+* `calibrated_products` : where the raw data landed from downloading
+* `split_products_path` : locations of the split data products
+* `selfcal_products_nonsub_path` : list of self calibrated products (non continuum subtracted)
+* `selfcal_products_sub_path` : list of self calibrated products (continuum subtracted)
+* `final_imaging_products_path` : list of final maps/cubes
