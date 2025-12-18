@@ -37,17 +37,20 @@ def db_execute(conn, query, params=(), commit=False):
 
 
 # ---------------------
-# MOUS getters
+# mous and pipeline state getters
 # ---------------------
-
 
 def get_mous_record(conn, mous_id: str):
     return db_fetch_one(conn, "SELECT * FROM mous WHERE mous_id=?", (mous_id,))
 
 
-def get_mous_download_url(conn, mous_id: str) -> str:
+def get_pipeline_state_record(conn, mous_id: str):
+    return db_fetch_one(conn, "SELECT * FROM pipeline_state WHERE mous_id=?", (mous_id,))
+
+
+def get_pipeline_state_download_url(conn, mous_id: str) -> str:
     row = db_fetch_one(
-        conn, "SELECT download_url FROM mous WHERE mous_id=?", (mous_id,)
+        conn, "SELECT download_url FROM pipeline_state WHERE mous_id=?", (mous_id,)
     )
     return row["download_url"] if row else None
 
@@ -90,3 +93,110 @@ def get_mous_spw_mapping(conn, mous_id: str) -> dict:
         if m:
             spw_map.setdefault(source, set()).add(int(m.group(1)))
     return {k: sorted(v) for k, v in spw_map.items()}
+
+# ---------------------
+# mous and pipeline state setters
+# ---------------------
+
+def set_download_status_pending(conn, mous_id: str):
+    """Sets only the status to pending."""
+    with db_transaction(conn):
+        conn.execute("""
+            UPDATE pipeline_state 
+            SET download_status=?
+            WHERE mous_id=?
+        """, (
+            "pending",
+            mous_id
+        ))
+
+
+def set_download_status_error(conn, mous_id: str):
+    """Sets only the status to error."""
+    with db_transaction(conn):
+        conn.execute("""
+            UPDATE pipeline_state 
+            SET download_status=?
+            WHERE mous_id=?
+        """, (
+            "error",
+            mous_id
+        ))
+
+
+def set_download_status_in_progress(conn, mous_id: str, timestamp=False):
+    """Sets only the status to pending (with optional timestamp)."""
+
+    if timestamp:
+        with db_transaction(conn):
+            conn.execute("""
+                UPDATE pipeline_state 
+                SET download_status=?,
+                download_started_at = CURRENT_TIMESTAMP
+                WHERE mous_id=?
+            """, (
+                "in_progress",
+                mous_id
+            ))
+    else:
+        with db_transaction(conn):
+            conn.execute("""
+                UPDATE pipeline_state 
+                SET download_status=?
+                WHERE mous_id=?
+            """, (
+                "in_progress",
+                mous_id
+            ))
+
+
+def set_download_status_complete(conn, mous_id: str, timestamp=False):
+    """Sets only the status to complete (with optional timestamp)."""
+
+    if timestamp:
+        with db_transaction(conn):
+            conn.execute("""
+                UPDATE pipeline_state 
+                SET download_status=?,
+                download_ended_at = CURRENT_TIMESTAMP
+                WHERE mous_id=?
+            """, (
+                "complete",
+                mous_id
+            ))
+    else:
+        with db_transaction(conn):
+            conn.execute("""
+                UPDATE pipeline_state 
+                SET download_status=?
+                WHERE mous_id=?
+            """, (
+                "complete",
+                mous_id
+            ))
+
+
+def set_calibrated_products(conn, mous_id: str, calibrated_products: list):
+    """Sets the calibrated products entry for a given mous_id."""
+    with db_transaction(conn):
+        conn.execute("""
+            UPDATE pipeline_state 
+            SET calibrated_products=?
+            WHERE mous_id=?
+        """, (
+            calibrated_products,
+            mous_id
+        ))
+
+
+def set_mous_directory(conn, mous_id: str, mous_directory: str):
+    """Sets the mous directory entry for a given mous_id."""
+    with db_transaction(conn):
+        conn.execute("""
+            UPDATE pipeline_state 
+            SET mous_directory=?
+            WHERE mous_id=?
+        """, (
+            mous_directory,
+            mous_id
+        ))
