@@ -57,3 +57,16 @@ deployments:
     name: headless-runs
     work_queue_name: null
     job_variables: {}
+
+- name: post-download-organize
+  version: null
+  tags: []
+  description: null
+  schedule: {}
+  flow_name: null
+  entrypoint: mous_post_download_organize.py:post_download_organize
+  parameters: {}
+  work_pool:
+    name: vm-runs
+    work_queue_name: null
+    job_variables: {}

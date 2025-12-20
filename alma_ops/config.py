@@ -23,24 +23,44 @@ VM_MOUNT_PREFIX = "/home/ubuntu/canfar_arc/projects/ALMA-SAILS"  # Adjust to you
 PLATFORM_PREFIX = "/arc/projects/ALMA-SAILS"
 
 
-def to_platform_path(path: Path | str) -> str:
+def to_platform_path(path: Path | str | list[Path | str]) -> str | list[str]:
     """
-    Convert VM mount path to platform native path for headless sessions.
+    Convert VM mount path(s) to platform native path(s) for headless sessions.
+    
+    Args:
+        path: Single path or list of paths to convert.
+        
+    Returns:
+        Single string or list of strings (matches input type)
     
     Example:
-        /mnt/pspace/datasets/uid_123 → /arc/projects/ALMA-SAILS/datasets/uid_123
+        Single: /mnt/pspace/datasets/uid_123 → /arc/projects/ALMA-SAILS/datasets/uid_123
+        List: ["/mnt/pspace/a", "/mnt/pspace/b"] → ["/arc/projects/ALMA-SAILS/a", ...]
     """
-    path_str = str(path)
-    return path_str.replace(VM_MOUNT_PREFIX, PLATFORM_PREFIX)
+    if isinstance(path, list):
+        return [str(p).replace(VM_MOUNT_PREFIX, PLATFORM_PREFIX) for p in path]
+    else:
+        return str(path).replace(VM_MOUNT_PREFIX, PLATFORM_PREFIX)
 
-def to_vm_path(path: str) -> Path:
+
+def to_vm_path(path: str | list[str]) -> Path | list[Path]:
     """
-    Convert platform native path to VM mount path.
+    Convert platform native path(s) to VM mount path(s).
     
+    Args:
+        path: Single path or list of paths to convert.
+        
+    Returns:
+        Single Path or list of Paths (matches input type)
+
     Example:
-        /arc/projects/ALMA-SAILS/datasets/uid_123 → /mnt/pspace/datasets/uid_123
+        Single: /arc/projects/ALMA-SAILS/datasets/uid_123 → /mnt/pspace/datasets/uid_123
+        List: ["/arc/.../a", "/arc/.../b"] → [Path("/mnt/pspace/a"), ...]
     """
-    return Path(path.replace(PLATFORM_PREFIX, VM_MOUNT_PREFIX))
+    if isinstance(path, list):
+        return [Path(p.replace(PLATFORM_PREFIX, VM_MOUNT_PREFIX)) for p in path]
+    else:
+        return Path(path.replace(PLATFORM_PREFIX, VM_MOUNT_PREFIX))
 
 # CASA Image to use for processing
 CASA_IMAGE = "images.canfar.net/casa-6/casa:6.6.4-34"

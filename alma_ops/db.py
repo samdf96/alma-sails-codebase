@@ -1,4 +1,5 @@
 # alma_ops/db.py
+import json
 import re
 import sqlite3
 from contextlib import contextmanager
@@ -53,6 +54,13 @@ def get_pipeline_state_download_url(conn, mous_id: str) -> str:
         conn, "SELECT download_url FROM pipeline_state WHERE mous_id=?", (mous_id,)
     )
     return row["download_url"] if row else None
+
+
+def get_pipeline_state_mous_directory(conn, mous_id: str) -> str:
+    row = db_fetch_one(
+        conn, "SELECT mous_directory FROM pipeline_state WHERE mous_id=?", (mous_id,)
+    )
+    return row['mous_directory'] if row else None
 
 
 def get_mous_targets(conn, mous_id: str):
@@ -125,7 +133,7 @@ def set_download_status_error(conn, mous_id: str):
 
 
 def set_download_status_in_progress(conn, mous_id: str, timestamp=False):
-    """Sets only the status to pending (with optional timestamp)."""
+    """Sets only the status to in_progress (with optional timestamp)."""
 
     if timestamp:
         with db_transaction(conn):
@@ -158,7 +166,7 @@ def set_download_status_complete(conn, mous_id: str, timestamp=False):
             conn.execute("""
                 UPDATE pipeline_state 
                 SET download_status=?,
-                download_ended_at = CURRENT_TIMESTAMP
+                download_completed_at = CURRENT_TIMESTAMP
                 WHERE mous_id=?
             """, (
                 "complete",
@@ -176,15 +184,22 @@ def set_download_status_complete(conn, mous_id: str, timestamp=False):
             ))
 
 
-def set_calibrated_products(conn, mous_id: str, calibrated_products: list):
+def set_calibrated_products(conn, mous_id: str, calibrated_products: str | list):
     """Sets the calibrated products entry for a given mous_id."""
+
+    # Convert to JSON string if it's a list
+    if isinstance(calibrated_products, list):
+        products_str = json.dumps(calibrated_products)
+    else:
+        products_str = calibrated_products
+
     with db_transaction(conn):
         conn.execute("""
             UPDATE pipeline_state 
             SET calibrated_products=?
             WHERE mous_id=?
         """, (
-            calibrated_products,
+            products_str,
             mous_id
         ))
 
@@ -198,5 +213,59 @@ def set_mous_directory(conn, mous_id: str, mous_directory: str):
             WHERE mous_id=?
         """, (
             mous_directory,
+            mous_id
+        ))
+
+
+def set_pre_selfcal_split_status_pending(conn, mous_id: str):
+    """Sets only the status to pending."""
+    with db_transaction(conn):
+        conn.execute("""
+            UPDATE pipeline_state 
+            SET pre_selfcal_split_status=?
+            WHERE mous_id=?
+        """, (
+            "pending",
+            mous_id
+        ))
+
+
+def set_pre_selfcal_split_status_error(conn, mous_id: str):
+    """Sets only the status to error."""
+    with db_transaction(conn):
+        conn.execute("""
+            UPDATE pipeline_state 
+            SET pre_selfcal_split_status=?
+            WHERE mous_id=?
+        """, (
+            "error",
+            mous_id
+        ))
+
+
+def set_pre_selfcal_split_status_in_progress(conn, mous_id: str):
+    """Sets only the status to in_progress."""
+
+    with db_transaction(conn):
+        conn.execute("""
+            UPDATE pipeline_state 
+            SET pre_selfcal_split_status=?,
+            WHERE mous_id=?
+        """, (
+            "in_progress",
+            mous_id
+        ))
+
+
+def set_pre_selfcal_split_status_complete(conn, mous_id: str):
+    """Sets only the status to complete."""
+
+    with db_transaction(conn):
+        conn.execute("""
+            UPDATE pipeline_state 
+            SET pre_selfcal_split_status=?
+            WHERE mous_id=?
+        """, (
+            "complete",
             mous_id
         ))

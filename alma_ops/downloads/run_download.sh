@@ -2,10 +2,12 @@
 # run_download.sh
 # Usage: run_download.sh <download_dir> <url>
 
-set -euo pipefail
+set -uo pipefail
 
 DOWNLOAD_DIR="$1"
 URL="$2"
+DB_PATH="$3"
+MOUS_ID="$4"
 
 # Move into the download directory
 cd "$DOWNLOAD_DIR"
@@ -15,3 +17,36 @@ echo "[INFO] Changed working directory to: $(pwd)"
 
 # Run wget2 command
 wget2 -r -l 10 --reject-regex="index.html*" --progress=bar -np -nH --cut-dirs=3 "$URL"
+
+# Capture exit code
+WGET_EXIT_CODE=$?
+
+echo "[INFO] wget2 exit code: $WGET_EXIT_CODE"
+
+# Now decide what to do
+if [ $WGET_EXIT_CODE -eq 0 ] || [ $WGET_EXIT_CODE -eq 8 ]; then
+    if [ $WGET_EXIT_CODE -eq 8 ]; then
+        echo "[WARNING] wget2 exit code 8 (server errors like 404s) but continuing..."
+    else
+        echo "[SUCCESS] Download completed successfully"
+    fi
+
+    # update database to 'downloaded' state
+    echo "[INFO] Updating database status to 'downloaded'"
+    sqlite3 "$DB_PATH" "UPDATE pipeline_state SET download_status = 'downloaded', download_completed_at = CURRENT_TIMESTAMP WHERE mous_id = '$MOUS_ID';"
+
+    if [ $? -eq 0 ]; then
+        echo "[SUCCESS] Database updated successfully"
+        exit 0
+    else
+        echo "[ERROR] Failed to update database"
+        exit 1
+    fi
+else
+    echo "[ERROR] wget2 failed with exit code: $WGET_EXIT_CODE"
+
+    # mark error in database
+    sqlite3 "$DB_PATH" "UPDATE pipeline_state SET download_status = 'error' WHERE mous_id = '$MOUS_ID';"
+
+    exit $WGET_EXIT_CODE
+fi
