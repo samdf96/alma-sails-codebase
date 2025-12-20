@@ -108,3 +108,37 @@ Deployments are made via the [`prefect.yaml`](../../prefect/prefect.yaml) file a
 prefect deploy --all
 ```
 
+## Starting Processes
+
+Processes can be started on the VM, but only so long as the terminal sessions that run them are active. For instance, in a local VSCode session that uses Remote-SSH, `screen` must be used in order to keep those processes active, while the Remote SSH session has been disconnected. Use the following:
+
+```bash
+screen -S process_name
+```
+
+to open a `screen` session, and then:
+
+```bash
+export PREFECT_HOME=/mnt/pspace/prefect-data
+source /mnt/pspace/prefect-env/bin/activate
+prefect server start --host 0.0.0.0
+```
+
+To start any workers for the work-pools:
+```bash
+export PREFECT_HOME=/mnt/pspace/prefect-data
+source /mnt/pspace/prefect-env/bin/activate
+prefect worker start --pool "pipeline-state-monitoring"
+```
+
+The use of CTRL+A,D is used to detach from the screen session. This will put it into the background. To view all currently running screen sessions:
+
+```bash
+screen -ls
+```
+
+and to re-attach a specific one:
+
+```bash
+screen -r process_name
+```
