@@ -1,16 +1,18 @@
-# alma_ops/casa_driver.py
-
 """
+casa_driver.py
+--------------------
 Only works in a *CASA environment*, casatask or casatools imports not needed.
 This script is intended to be used as the following from a canfar.sessions create() function:
 
 sessions.create(
     name=job_name
-    image=CASA_IMAGE
+    image=SOME_CASA_IMAGE
     cmd="casa",
-    args="--logfile [logfilepath] -c casa_driver.py --json-payload [jsonfilepath]
+    args="--logfile [logfilepath] -c [casa_driver_filepath] --json-payload [jsonfilepath]
 )
 """
+# ruff: noqa: F821
+
 import argparse
 import json
 

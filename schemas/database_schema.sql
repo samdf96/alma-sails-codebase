@@ -111,9 +111,9 @@ CREATE TABLE pipeline_state (
     download_url TEXT,
 
     -- High-level pipeline stages
-    download_status TEXT DEFAULT 'pending',       -- pending | in_progress | complete | error
-    pre_selfcal_split_status TEXT DEFAULT 'pending',
-    pre_selfcal_listobs_status TEXT DEFAULT 'pending',
+    download_status TEXT DEFAULT 'pending',             -- pending | in_progress | downloaded | complete | error
+    pre_selfcal_split_status TEXT DEFAULT 'pending',    -- pending | in_progress | split | complete | error
+    pre_selfcal_listobs_status TEXT DEFAULT 'pending',  -- pending | in_progress | listed | complete | error
     selfcal_status TEXT DEFAULT 'pending',
     imaging_status TEXT DEFAULT 'pending',
     cleanup_status TEXT DEFAULT 'pending',
@@ -134,7 +134,7 @@ CREATE TABLE pipeline_state (
     split_products_path TEXT DEFAULT '[]',          -- list of split products
     selfcal_products_nonsub_path TEXT DEFAULT '[]', -- list of selfcalibrated products (non continuum subtracted)
     selfcal_products_sub_path TEXT DEFAULT '[]',    -- list of selfcalibrated products (continuum subtracted)
-    final_imaging_products_path TEXT DEFAULT '[]',  -- location of final maps/cubes                    -- store useful logs for debugging
+    final_imaging_products_path TEXT DEFAULT '[]',  -- location of final maps/cubes
 
     -- Cleanup notes or deletion records
     cleanup_notes TEXT,
@@ -142,4 +142,8 @@ CREATE TABLE pipeline_state (
     -- For debugging failed runs
     last_error_message TEXT,
     last_updated_at TEXT
+
+    -- TODO: add information for raw datasets
+    -- ADD: raw_data_spectral_remap TEXT
+    -- ADD: preferred_datacolumn TEXT;
 );

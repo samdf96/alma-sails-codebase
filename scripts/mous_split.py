@@ -133,7 +133,7 @@ def schedule_split_for_mous(
             "--logfile",
             str(logfile_path),
             "-c",
-            "/arc/projects/ALMA-SAILS/alma_ops/casa_driver.py",
+            "/arc/projects/ALMA-SAILS/alma-sails-codebase/alma_ops/casa_driver.py",
             f"--json-payload {json_path}",
         ]
     )

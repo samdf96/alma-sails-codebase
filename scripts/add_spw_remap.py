@@ -1,16 +1,10 @@
 """
-add_mous_url.py
+add_spw_remap.py
 ----------------
-Add or update a MOUS download URL in the database.
+Add or update the SPW remap for a given MOUS ID in the pipeline_state database.
 
-Usage:
-    python add_mous_url.py uid___A002_X1234_Xabc https://...
-    python add_mous_url.py uid://A002/X1234/Xabc https://...
-
-This will:
-  • Normalize the MOUS ID (uid___ → uid:// form)
-  • Verify the MOUS exists
-  • Update the download_url field
+Example:
+    python add_spw_remap.py uid://A002/X628157/X2d 16:0 18:1 20:2 22:3
 """
 # ruff: noqa: E402
 
@@ -25,6 +19,7 @@ setup_path()
 # Standard imports
 # ---------------------------------------------------------------------
 import argparse
+import json
 
 from alma_ops.config import DB_PATH
 from alma_ops.db import (
@@ -42,23 +37,33 @@ from alma_ops.utils import to_db_mous_id
 # ---------------------------------------------------------------------
 # Logger
 # ---------------------------------------------------------------------
-log = get_logger("add_mous_url")
+log = get_logger("add_spw_remap")
 
-# =====================================================================
-# Script entry point
-# =====================================================================
+
+def parse_spw_map(pairs: list[str]) -> dict[int, int]:
+    remap = {}
+    for p in pairs:
+        try:
+            src, dst = p.split(":")
+            remap[int(src)] = int(dst)
+        except ValueError:
+            raise ValueError(f"Invalid mapping '{p}'. Expected N:M")
+    return remap
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Add/update the download URL for a given MOUS."
+        description="Add/update the SPW remap for a given MOUS ID."
     )
     parser.add_argument("mous", help="MOUS ID (uid___A/B/C or uid://A/B/C format)")
-    parser.add_argument("download_url", help="Download URL to store")
+    parser.add_argument(
+        "map",
+        nargs="+",
+        help="SPW mappings in form src:dst (e.g. 16:0 18:1)",
+    )
     parser.add_argument(
         "--db-path", default=DB_PATH, help=f"Path to database (default: {DB_PATH})"
     )
-
     args = parser.parse_args()
 
     # ---------------------------------------------------------------
@@ -74,31 +79,35 @@ def main():
     # ---------------------------------------------------------------
     # Connect to DB
     # ---------------------------------------------------------------
-    with get_db_connection(args.db_path) as conn:
-        # Ensure MOUS exists
+    with get_db_connection(DB_PATH) as conn:
+        # ensure MOUS exists
         record = get_pipeline_state_record(conn, normalized)
         if record is None:
-            log.error(f"No MOUS found matching ID: {normalized}")
+            log.error(f"MOUS {normalized} not found in database.")
             return
 
         # -----------------------------------------------------------
         # Update field
         # -----------------------------------------------------------
+        try:
+            remap = parse_spw_map(args.map)
+        except ValueError:
+            raise
+
+        payload = json.dumps(remap, indent=2)
+
         db_execute(
             conn,
             """
             UPDATE pipeline_state
-            SET download_url=?
-            WHERE mous_id=?
+            SET raw_data_spectral_remap = ?
+            WHERE mous_id = ?
             """,
-            params=(
-                args.download_url,
-                normalized,
-            ),
+            params=(payload, normalized),
             commit=True,
         )
 
-        log.info(f"✅ Updated download URL for {normalized}")
+    log.info(f"SPW remap for MOUS {normalized} updated successfully.")
 
 
 # =====================================================================

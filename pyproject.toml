@@ -9,3 +9,8 @@ dependencies = [
     "pandas>=2.3.3",
     "prefect>=3.6.4",
 ]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14.10",
+]

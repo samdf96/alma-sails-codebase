@@ -41,12 +41,15 @@ def db_execute(conn, query, params=(), commit=False):
 # mous and pipeline state getters
 # ---------------------
 
+
 def get_mous_record(conn, mous_id: str):
     return db_fetch_one(conn, "SELECT * FROM mous WHERE mous_id=?", (mous_id,))
 
 
 def get_pipeline_state_record(conn, mous_id: str):
-    return db_fetch_one(conn, "SELECT * FROM pipeline_state WHERE mous_id=?", (mous_id,))
+    return db_fetch_one(
+        conn, "SELECT * FROM pipeline_state WHERE mous_id=?", (mous_id,)
+    )
 
 
 def get_pipeline_state_download_url(conn, mous_id: str) -> str:
@@ -60,7 +63,23 @@ def get_pipeline_state_mous_directory(conn, mous_id: str) -> str:
     row = db_fetch_one(
         conn, "SELECT mous_directory FROM pipeline_state WHERE mous_id=?", (mous_id,)
     )
-    return row['mous_directory'] if row else None
+    return row["mous_directory"] if row else None
+
+
+def get_pipeline_state_calibrated_products(
+    conn, mous_id: str
+) -> str | list[str] | None:
+    row = db_fetch_one(
+        conn,
+        "SELECT calibrated_products FROM pipeline_state WHERE mous_id=?",
+        (mous_id,),
+    )
+    if row and row["calibrated_products"]:
+        try:
+            return json.loads(row["calibrated_products"])
+        except json.JSONDecodeError:
+            return row["calibrated_products"]
+    return None
 
 
 def get_mous_targets(conn, mous_id: str):
@@ -90,46 +109,116 @@ def get_mous_expected_asdms(conn, mous_id: str) -> int:
     return int(row["num_asdms"])
 
 
-def get_mous_spw_mapping(conn, mous_id: str) -> dict:
+def get_mous_spw_mapping(conn, mous_id: str) -> dict[str, list[int]]:
     rows = db_fetch_all(
         conn, "SELECT alma_source_name, obs_id FROM targets WHERE mous_id=?", (mous_id,)
     )
+
+    # setting spw pattern matching
     spw_pattern = re.compile(r"\.spw\.(\d+)$")
     spw_map = {}
+
+    spw_remap = get_spw_remap(conn, mous_id)
+
     for source, obs_id in rows:
         m = spw_pattern.search(obs_id or "")
-        if m:
-            spw_map.setdefault(source, set()).add(int(m.group(1)))
+
+        if not m:
+            continue
+
+        spw = int(m.group(1))
+
+        # remap if needed
+        if spw_remap and spw in spw_remap:
+            spw = spw_remap[spw]
+
+        spw_map.setdefault(source, set()).add(spw)
+
     return {k: sorted(v) for k, v in spw_map.items()}
+
+
+def get_spw_remap(conn, mous_id: str) -> dict:
+    row = db_fetch_one(
+        conn,
+        "SELECT raw_data_spectral_remap FROM pipeline_state WHERE mous_id=?",
+        (mous_id,),
+    )
+
+    if not row:
+        return None
+
+    # check if remap exists, else return None
+    if row["raw_data_spectral_remap"] is not None:
+        try:
+            raw = json.loads(row["raw_data_spectral_remap"])
+            return {int(k): int(v) for k, v in raw.items()}
+
+        except json.JSONDecodeError:
+            raise ValueError("Invalid JSON in raw_data_spectral_remap")
+
+    else:
+        raw = None
+
+
+def get_pipeline_state_preferred_datacolumn(conn, mous_id: str):
+    row = db_fetch_one(
+        conn,
+        "SELECT preferred_datacolumn FROM pipeline_state WHERE mous_id=?",
+        (mous_id,),
+    )
+
+    if not row:
+        raise ValueError("MOUS ID not found in pipeline_state table")
+
+    # return the preferred_datacolumn value
+    return row["preferred_datacolumn"]
+
+
+def get_pipeline_state_split_products_path(
+    conn, mous_id: str
+) -> str | list[str] | None:
+    row = db_fetch_one(
+        conn,
+        "SELECT split_products_path FROM pipeline_state WHERE mous_id=?",
+        (mous_id,),
+    )
+    if row and row["split_products_path"]:
+        try:
+            return json.loads(row["split_products_path"])
+        except json.JSONDecodeError:
+            return row["split_products_path"]
+    return None
+
 
 # ---------------------
 # mous and pipeline state setters
 # ---------------------
 
+
 def set_download_status_pending(conn, mous_id: str):
     """Sets only the status to pending."""
     with db_transaction(conn):
-        conn.execute("""
+        conn.execute(
+            """
             UPDATE pipeline_state 
             SET download_status=?
             WHERE mous_id=?
-        """, (
-            "pending",
-            mous_id
-        ))
+        """,
+            ("pending", mous_id),
+        )
 
 
 def set_download_status_error(conn, mous_id: str):
     """Sets only the status to error."""
     with db_transaction(conn):
-        conn.execute("""
+        conn.execute(
+            """
             UPDATE pipeline_state 
             SET download_status=?
             WHERE mous_id=?
-        """, (
-            "error",
-            mous_id
-        ))
+        """,
+            ("error", mous_id),
+        )
 
 
 def set_download_status_in_progress(conn, mous_id: str, timestamp=False):
@@ -137,25 +226,25 @@ def set_download_status_in_progress(conn, mous_id: str, timestamp=False):
 
     if timestamp:
         with db_transaction(conn):
-            conn.execute("""
+            conn.execute(
+                """
                 UPDATE pipeline_state 
                 SET download_status=?,
                 download_started_at = CURRENT_TIMESTAMP
                 WHERE mous_id=?
-            """, (
-                "in_progress",
-                mous_id
-            ))
+            """,
+                ("in_progress", mous_id),
+            )
     else:
         with db_transaction(conn):
-            conn.execute("""
+            conn.execute(
+                """
                 UPDATE pipeline_state 
                 SET download_status=?
                 WHERE mous_id=?
-            """, (
-                "in_progress",
-                mous_id
-            ))
+            """,
+                ("in_progress", mous_id),
+            )
 
 
 def set_download_status_complete(conn, mous_id: str, timestamp=False):
@@ -163,25 +252,25 @@ def set_download_status_complete(conn, mous_id: str, timestamp=False):
 
     if timestamp:
         with db_transaction(conn):
-            conn.execute("""
+            conn.execute(
+                """
                 UPDATE pipeline_state 
                 SET download_status=?,
                 download_completed_at = CURRENT_TIMESTAMP
                 WHERE mous_id=?
-            """, (
-                "complete",
-                mous_id
-            ))
+            """,
+                ("complete", mous_id),
+            )
     else:
         with db_transaction(conn):
-            conn.execute("""
+            conn.execute(
+                """
                 UPDATE pipeline_state 
                 SET download_status=?
                 WHERE mous_id=?
-            """, (
-                "complete",
-                mous_id
-            ))
+            """,
+                ("complete", mous_id),
+            )
 
 
 def set_calibrated_products(conn, mous_id: str, calibrated_products: str | list):
@@ -194,78 +283,132 @@ def set_calibrated_products(conn, mous_id: str, calibrated_products: str | list)
         products_str = calibrated_products
 
     with db_transaction(conn):
-        conn.execute("""
+        conn.execute(
+            """
             UPDATE pipeline_state 
             SET calibrated_products=?
             WHERE mous_id=?
-        """, (
-            products_str,
-            mous_id
-        ))
+        """,
+            (products_str, mous_id),
+        )
 
 
 def set_mous_directory(conn, mous_id: str, mous_directory: str):
     """Sets the mous directory entry for a given mous_id."""
     with db_transaction(conn):
-        conn.execute("""
+        conn.execute(
+            """
             UPDATE pipeline_state 
             SET mous_directory=?
             WHERE mous_id=?
-        """, (
-            mous_directory,
-            mous_id
-        ))
+        """,
+            (mous_directory, mous_id),
+        )
 
 
 def set_pre_selfcal_split_status_pending(conn, mous_id: str):
     """Sets only the status to pending."""
     with db_transaction(conn):
-        conn.execute("""
+        conn.execute(
+            """
             UPDATE pipeline_state 
             SET pre_selfcal_split_status=?
             WHERE mous_id=?
-        """, (
-            "pending",
-            mous_id
-        ))
+        """,
+            ("pending", mous_id),
+        )
 
 
 def set_pre_selfcal_split_status_error(conn, mous_id: str):
     """Sets only the status to error."""
     with db_transaction(conn):
-        conn.execute("""
+        conn.execute(
+            """
             UPDATE pipeline_state 
             SET pre_selfcal_split_status=?
             WHERE mous_id=?
-        """, (
-            "error",
-            mous_id
-        ))
+        """,
+            ("error", mous_id),
+        )
 
 
 def set_pre_selfcal_split_status_in_progress(conn, mous_id: str):
     """Sets only the status to in_progress."""
 
     with db_transaction(conn):
-        conn.execute("""
+        conn.execute(
+            """
             UPDATE pipeline_state 
-            SET pre_selfcal_split_status=?,
+            SET pre_selfcal_split_status=?
             WHERE mous_id=?
-        """, (
-            "in_progress",
-            mous_id
-        ))
+        """,
+            ("in_progress", mous_id),
+        )
 
 
 def set_pre_selfcal_split_status_complete(conn, mous_id: str):
     """Sets only the status to complete."""
 
     with db_transaction(conn):
-        conn.execute("""
+        conn.execute(
+            """
             UPDATE pipeline_state 
             SET pre_selfcal_split_status=?
             WHERE mous_id=?
-        """, (
-            "complete",
-            mous_id
-        ))
+        """,
+            ("complete", mous_id),
+        )
+
+
+def set_pre_selfcal_listobs_status_pending(conn, mous_id: str):
+    """Sets only the status to pending."""
+    with db_transaction(conn):
+        conn.execute(
+            """
+            UPDATE pipeline_state 
+            SET pre_selfcal_listobs_status=?
+            WHERE mous_id=?
+        """,
+            ("pending", mous_id),
+        )
+
+
+def set_pre_selfcal_listobs_status_error(conn, mous_id: str):
+    """Sets only the status to error."""
+    with db_transaction(conn):
+        conn.execute(
+            """
+            UPDATE pipeline_state 
+            SET pre_selfcal_listobs_status=?
+            WHERE mous_id=?
+        """,
+            ("error", mous_id),
+        )
+
+
+def set_pre_selfcal_listobs_status_in_progress(conn, mous_id: str):
+    """Sets only the status to in_progress."""
+
+    with db_transaction(conn):
+        conn.execute(
+            """
+            UPDATE pipeline_state 
+            SET pre_selfcal_listobs_status=?
+            WHERE mous_id=?
+        """,
+            ("in_progress", mous_id),
+        )
+
+
+def set_pre_selfcal_listobs_status_complete(conn, mous_id: str):
+    """Sets only the status to complete."""
+
+    with db_transaction(conn):
+        conn.execute(
+            """
+            UPDATE pipeline_state 
+            SET pre_selfcal_listobs_status=?
+            WHERE mous_id=?
+        """,
+            ("complete", mous_id),
+        )

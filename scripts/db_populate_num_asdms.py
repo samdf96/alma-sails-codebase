@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 update_asdm_counts.py
 ---------------------
@@ -15,6 +14,7 @@ The JSON file should look like this:
 Usage:
     python run_database_update_asdm_counts.py --db serpens_main.db --json serpens_main_asdm_metadata.json
 """
+# ruff: noqa: E402
 
 # ---------------------------------------------------------------------
 # Bootstrap (allow importing alma_ops when running from scripts/)
@@ -27,24 +27,20 @@ setup_path()
 # imports
 # ---------------------------------------------------------------------
 
-import sqlite3  # noqa: E402
-import json  # noqa: E402
-from tabulate import tabulate  # noqa: E402
-from datetime import datetime  # noqa: E402
-import argparse  # noqa: E402
-from pathlib import Path  # noqa: E402
+import argparse
+import json
+import sqlite3
+from pathlib import Path
 
-from alma_ops.config import DB_PATH  # noqa: E402
-from alma_ops.logging import get_logger  # noqa: E402
+from alma_ops.config import DB_PATH
+from alma_ops.logging import get_logger
+from tabulate import tabulate
 
 # ---------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------
 log = get_logger("db_populate_num_asdms")
 
-# ---------------------------------------------------------------------
-# Utility functions
-# ---------------------------------------------------------------------
 
 def load_asdm_metadata(json_path: Path) -> dict:
     """Load manual ASDM counts from a JSON file."""
@@ -53,7 +49,9 @@ def load_asdm_metadata(json_path: Path) -> dict:
     with open(json_path, "r") as f:
         data = json.load(f)
     if not isinstance(data, dict):
-        raise ValueError(f"JSON structure must be a dictionary of {{mous_id: count}}, not {type(data)}")
+        raise ValueError(
+            f"JSON structure must be a dictionary of {{mous_id: count}}, not {type(data)}"
+        )
     print(f"📁 Loaded {len(data)} MOUS entries from {json_path}")
     return data
 
@@ -93,7 +91,9 @@ def print_summary(updates, missing, dry_run=False):
     if updates:
         table = [[m, c] for m, c in updates]
         print(tabulate(table, headers=["MOUS ID", "num_asdms"], tablefmt="grid"))
-        print(f"\n{'🧪 (dry-run)' if dry_run else '✅'} Updated {len(updates)} entries.")
+        print(
+            f"\n{'🧪 (dry-run)' if dry_run else '✅'} Updated {len(updates)} entries."
+        )
     else:
         print("No matching MOUS entries updated.")
 
@@ -113,9 +113,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Update ASDM counts in 'mous' table using a JSON metadata file."
     )
-    parser.add_argument("json", help="Path to JSON file with {mous_id: asdm_count} data.")
+    parser.add_argument(
+        "json", help="Path to JSON file with {mous_id: asdm_count} data."
+    )
     parser.add_argument("--db-path", default=DB_PATH)
-    parser.add_argument("--dry-run", action="store_true", help="Preview changes without committing.")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Preview changes without committing."
+    )
     args = parser.parse_args()
 
     json_path = Path(args.json)

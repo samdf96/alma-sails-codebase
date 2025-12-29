@@ -1,9 +1,12 @@
 #!/bin/bash
 # run_download.sh
-# Usage: run_download.sh <download_dir> <url>
+# Usage: run_download.sh <download_dir> <url> <db_path> <mous_id>
 
 set -uo pipefail
 
+# -------------------------
+# Positional arguments
+# -------------------------
 DOWNLOAD_DIR="$1"
 URL="$2"
 DB_PATH="$3"

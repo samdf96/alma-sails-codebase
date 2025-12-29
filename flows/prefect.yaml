@@ -70,3 +70,29 @@ deployments:
     name: vm-runs
     work_queue_name: null
     job_variables: {}
+
+- name: mous-split
+  version: null
+  tags: []
+  description: null
+  schedule: {}
+  flow_name: null
+  entrypoint: mous_split.py:mous_split_flow
+  parameters: {}
+  work_pool:
+    name: headless-runs
+    work_queue_name: null
+    job_variables: {}
+
+- name: mous-listobs
+  version: null
+  tags: []
+  description: null
+  schedule: {}
+  flow_name: null
+  entrypoint: mous_post_split_listobs.py:mous_listobs_flow
+  parameters: {}
+  work_pool:
+    name: headless-runs
+    work_queue_name: null
+    job_variables: {}
