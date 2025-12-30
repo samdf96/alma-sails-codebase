@@ -77,7 +77,7 @@ deployments:
   description: null
   schedule: {}
   flow_name: null
-  entrypoint: mous_split.py:mous_split_flow
+  entrypoint: mous_split.py:split_mous_flow
   parameters: {}
   work_pool:
     name: headless-runs

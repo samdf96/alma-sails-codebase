@@ -36,9 +36,6 @@ import time
 from datetime import datetime
 from typing import Optional
 
-from canfar.sessions import Session
-from prefect import flow, get_run_logger, task
-
 from alma_ops.config import (
     DATASETS_DIR,
     DB_PATH,
@@ -53,6 +50,8 @@ from alma_ops.db import (
     update_pipeline_state_record,
 )
 from alma_ops.utils import to_dir_mous_id
+from canfar.sessions import Session
+from prefect import flow, get_run_logger, task
 
 # =====================================================================
 # Prefect Tasks
@@ -145,7 +144,7 @@ def launch_download_job_task(
     os.makedirs(tmpdir, exist_ok=True)
 
     # creating job name for headless session
-    job_name = f"wget2-{datetime.now().strftime('%Y%m%d_%H%M')}"
+    job_name = f"wget2-{datetime.now().strftime('%Y%m%d-%H%M')}"
 
     # for headless sessions: use platform-native paths
     log.info(f"[{mous_id}] Setting platform-native paths for headless session launch")

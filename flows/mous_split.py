@@ -36,9 +36,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from canfar.sessions import Session
-from prefect import flow, get_run_logger, task
-
 from alma_ops.config import (
     CASA_IMAGE_PIPE,
     DATASETS_DIR,
@@ -54,6 +51,8 @@ from alma_ops.db import (
     update_pipeline_state_record,
 )
 from alma_ops.utils import to_dir_mous_id
+from canfar.sessions import Session
+from prefect import flow, get_run_logger, task
 
 # =====================================================================
 # Prefect Tasks
@@ -264,7 +263,7 @@ def launch_split_job_task(
     log = get_run_logger()
 
     # creating job name and logfile paths
-    job_name = f"casa-{datetime.now().strftime('%Y%m%d_%H%M')}-splits"
+    job_name = f"casa-{datetime.now().strftime('%Y%m%d-%H%M')}-splits"
     casa_logfile_name = f"casa-{datetime.now().strftime('%Y%m%d-%H%M%S')}-splits.log"
     casa_logfile_path = Path(mous_dir) / casa_logfile_name
     log.info(f"[{mous_id}] Logfile path set as: {casa_logfile_path}")
