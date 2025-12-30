@@ -1,7 +1,7 @@
 """
 mous_post_split_listobs.py
 --------------------
-Script to generate listobs outputs for raw and split ASDMs.
+Script to generate listobs outputs for raw and split products.
 
 This script spins up a headless session to tackle the casa calls.
 
@@ -9,6 +9,10 @@ Usage:
 ------
 # Deployments from the alma-sails-codebase are made via:
 prefect deploy --all  # from the /flows directory
+
+Overview of Prefect Flow:
+------------------------
+
 """
 # ruff: noqa: E402
 
@@ -27,6 +31,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from canfar.sessions import Session
+from prefect import flow, get_run_logger, task
+
 from alma_ops.config import (
     CASA_IMAGE_PIPE,
     DATASETS_DIR,
@@ -36,75 +43,79 @@ from alma_ops.config import (
 )
 from alma_ops.db import (
     get_db_connection,
-    get_pipeline_state_calibrated_products,
-    get_pipeline_state_split_products_path,
-    set_pre_selfcal_listobs_status_error,
-    set_pre_selfcal_listobs_status_in_progress,
+    get_pipeline_state_record,
+    get_pipeline_state_record_column_value,
+    update_pipeline_state_record,
 )
 from alma_ops.utils import to_dir_mous_id
-from canfar.sessions import Session
-from prefect import flow, get_run_logger, task
 
 # =====================================================================
 # Prefect Tasks
 # =====================================================================
 
 
-@task(name="Validate MOUS Status")
-def validate_mous_status(mous_id: str, db_path: str):
-    """Check if MOUS is in 'complete' status for pre_selfcal_split status and 'pending' for pre_selfcal_listobs status."""
+@task(name="Validate MOUS Split Status")
+def validate_mous_split_status(mous_id: str, db_path: str):
     log = get_run_logger()
 
     # first check for 'complete' status on pre_selfcal_split_status
     with get_db_connection(db_path) as conn:
-        cursor = conn.execute(
-            "SELECT pre_selfcal_split_status FROM pipeline_state WHERE mous_id = ?",
-            (mous_id,),
-        )
-        row = cursor.fetchone()
+        row = get_pipeline_state_record(conn, mous_id)
 
         if not row:
-            log.error(f"[{mous_id}] MOUS ID not found in database.")
             raise ValueError(f"MOUS ID not found: {mous_id}")
 
-        status = row[0]
+        pre_selfcal_split_status = row["pre_selfcal_split_status"]
 
-        # TODO: remove 'complete' check when split step is fully retired
-        if status != "complete" and status != "split":
-            log.error(
-                f"[{mous_id}] pre_selfcal_split_status is '{status}', expected 'complete'."
-            )
+        if pre_selfcal_split_status != "complete":
             raise ValueError(
-                f"Invalid pre_selfcal_split_status for MOUS {mous_id}: {status}"
+                f"MOUS {mous_id} has status '{pre_selfcal_split_status}', expected 'complete'."
             )
 
-        # now check for pending status on pre_selfcal_listobs_status
-        cursor = conn.execute(
-            "SELECT pre_selfcal_listobs_status FROM pipeline_state WHERE mous_id = ?",
-            (mous_id,),
-        )
-        row = cursor.fetchone()
-        listobs_status = row[0]
+        log.info(f"[{mous_id}] pre_selfcal_split_status validated as 'complete'.")
 
-        if listobs_status != "pending":
-            log.error(
-                f"[{mous_id}] pre_selfcal_listobs_status is '{listobs_status}', expected 'pending'."
-            )
+        # check for pending status on pre_selfcal_listobs_status
+        pre_selfcal_listobs_status = row["pre_selfcal_listobs_status"]
+
+        if pre_selfcal_listobs_status != "pending":
             raise ValueError(
-                f"Invalid pre_selfcal_listobs_status for MOUS {mous_id}: {listobs_status}"
+                f"MOUS {mous_id} has pre_selfcal_listobs_status '{pre_selfcal_listobs_status}', expected 'pending'."
             )
 
         return
 
 
-@task(name="Build Split Job Payload")
-def build_split_job_payload(
+@task(name="Build Listobs Job Payload")
+def build_listobs_job_payload(
     mous_id: str,
     platform_db_path: str,
     platform_datasets_dir: str,
     platform_calibrated_products_path: list[str],
     platform_split_products_path: list[str],
 ):
+    """Build the listobs job payload.
+
+    Parameters
+    ----------
+    mous_id : str
+        The MOUS ID.
+    platform_db_path : str
+        Path to the database on the platform.
+    platform_datasets_dir : str
+        Path to the datasets directory on the platform.
+    platform_calibrated_products_path : list[str]
+        List of calibrated product paths on the platform.
+    platform_split_products_path : list[str]
+        List of split product paths on the platform.
+
+    Returns
+    -------
+    dict
+        The JSON payload for the listobs job.
+    """
+    log = get_run_logger()
+    log.info(f"[{mous_id}] Building listobs job payload...")
+
     # build JSON task list
     tasks = []
     for calibrated_product in platform_calibrated_products_path:
@@ -161,15 +172,35 @@ def json_write_payload(
 @task(name="Launch Listobs Job Task")
 def launch_listobs_job_task(
     mous_id: str,
-    platform_mous_dir: str,
     platform_db_path: str,
+    platform_mous_dir: str,
     img: str,
     json_payload_path: str,
 ):
+    """Calls the task that launches the headless session to run listobs.
+
+    Parameters
+    ----------
+    mous_id : str
+        The MOUS ID.
+    platform_db_path : str
+        The database path on the platform.
+    platform_mous_dir : str
+        The MOUS directory on the platform.
+    img : str
+        The docker image to use.
+    json_payload_path : str
+        The path to the JSON payload file.
+
+    Returns
+    -------
+    str
+        The job ID of the launched headless listobs session.
+    """
     log = get_run_logger()
 
     # creating job name and logfile paths
-    job_name = f"casa-{datetime.now().strftime('%Y%m%d')}-listobs"
+    job_name = f"casa-{datetime.now().strftime('%Y%m%d_%H%M')}-listobs"
     casa_logfile_name = f"casa-{datetime.now().strftime('%Y%m%d-%H%M%S')}-listobs.log"
     casa_logfile_path = Path(platform_mous_dir) / casa_logfile_name
     log.info(f"[{mous_id}] Logfile path: {casa_logfile_path}")
@@ -182,7 +213,7 @@ def launch_listobs_job_task(
         f"[{mous_id}] Terminal logfile path prefix: {terminal_logfile_path_prefix}"
     )
 
-    # set run headless listobs script path
+    # set run headless listobs script path - relative to PROJECT_ROOT
     run_headless_listobs_path = (
         Path(PROJECT_ROOT)
         / "alma-sails-codebase"
@@ -230,6 +261,38 @@ def launch_headless_listobs_session(
     casa_driver_script_path: str,
     json_payload_path: str,
 ):
+    """Launch a headless session to run the listobs job.
+
+    Parameters
+    ----------
+    mous_id : str
+        The MOUS ID.
+    db_path : str
+        The path to the SQLite database.
+    job_name : str
+        The name of the headless session job.
+    img : str
+        The docker image to use.
+    run_headless_listobs_script_path : str
+        The path to the headless listobs script.
+    terminal_logfile_path_prefix : str
+        The prefix for the terminal logfile path.
+    casa_logfile_path : str
+        The path to the CASA logfile.
+    casa_driver_script_path : str
+        The path to the CASA driver script.
+    json_payload_path : str
+        The path to the JSON payload file.
+    Returns
+    -------
+    list[str]
+        The launched job ID list.
+
+    Raises
+    ------
+    RuntimeError
+        If the job launch was unsuccessful.
+    """
     log = get_run_logger()
 
     # create session manager
@@ -244,8 +307,7 @@ def launch_headless_listobs_session(
     )
 
     if not job_id:
-        log.error(f"[{mous_id}] Failed to submit headless listobs job.")
-        raise RuntimeError(f"Failed to submit headless listobs job for MOUS {mous_id}")
+        raise RuntimeError("Unsuccessful job launch.")
 
     return job_id
 
@@ -255,14 +317,12 @@ def launch_headless_listobs_session(
 # =====================================================================
 
 
-@flow(name="Listobs MOUS")
-def mous_listobs_flow(
+@flow(name="Post Split Listobs")
+def post_split_listobs_flow(
     mous_id: str, db_path: Optional[str] = None, datasets_dir: Optional[str] = None
 ):
-    """Listobs the raw and split ASDMs for a given MOUS ID."""
     log = get_run_logger()
 
-    # parsing input information
     # parsing input parameters
     log.info(f"[{mous_id}] Parsing input variables...")
     db_path = db_path or DB_PATH
@@ -272,62 +332,82 @@ def mous_listobs_flow(
 
     # validate pre_selfcal_split_status is 'complete'
     log.info(f"[{mous_id}] Validating pre_selfcal_split_status...")
-    validate_mous_status(mous_id, db_path)
+    validate_mous_split_status(mous_id, db_path)
 
     # setting database status to 'in_progress'
     log.info(f"[{mous_id}] Setting pre_selfcal_listobs_status to 'in_progress'...")
     with get_db_connection(db_path) as conn:
-        set_pre_selfcal_listobs_status_in_progress(conn, mous_id)
+        update_pipeline_state_record(
+            conn,
+            mous_id,
+            pre_selfcal_listobs_status="in_progress",
+        )
 
     # fetch calibrated product locations and split product locations
     log.info(f"[{mous_id}] Fetching calibrated and split product locations...")
     with get_db_connection(db_path) as conn:
-        calibrated_products_path = get_pipeline_state_calibrated_products(conn, mous_id)
-        split_products_path = get_pipeline_state_split_products_path(conn, mous_id)
+        calibrated_products_path = get_pipeline_state_record_column_value(
+            conn, mous_id, "calibrated_products"
+        )
+        split_products_path = get_pipeline_state_record_column_value(
+            conn, mous_id, "split_products_path"
+        )
 
     log.info(f"[{mous_id}] Calibrated products path: {calibrated_products_path}")
     log.info(f"[{mous_id}] Split products path: {split_products_path}")
 
     if not calibrated_products_path:
-        log.error(f"[{mous_id}] No calibrated products found in database.")
         with get_db_connection(db_path) as conn:
-            set_pre_selfcal_listobs_status_error(conn, mous_id)
+            update_pipeline_state_record(
+                conn, mous_id, pre_selfcal_listobs_status="error"
+            )
         raise ValueError(f"No calibrated products for MOUS {mous_id}")
 
     if not split_products_path:
-        log.error(f"[{mous_id}] No split products found in database.")
         with get_db_connection(db_path) as conn:
-            set_pre_selfcal_listobs_status_error(conn, mous_id)
+            update_pipeline_state_record(
+                conn, mous_id, pre_selfcal_listobs_status="error"
+            )
         raise ValueError(f"No split products for MOUS {mous_id}")
 
-    payload = build_split_job_payload(
-        mous_id,
-        to_platform_path(db_path),
-        to_platform_path(datasets_dir),
-        [to_platform_path(p) for p in calibrated_products_path],
-        [to_platform_path(p) for p in split_products_path],
+    # build the job payload json file and save it to mous_directory
+    log.info(f"[{mous_id}] Building listobs-job schema...")
+
+    # pass in platform-specific paths
+    payload = build_listobs_job_payload(
+        mous_id=mous_id,
+        platform_db_path=to_platform_path(db_path),
+        platform_datasets_dir=to_platform_path(datasets_dir),
+        platform_calibrated_products_path=[
+            to_platform_path(p) for p in calibrated_products_path
+        ],
+        platform_split_products_path=[to_platform_path(p) for p in split_products_path],
     )
 
     # write JSON payload to file
     vm_mous_dir = Path(datasets_dir) / to_dir_mous_id(mous_id)
-    json_output_path = vm_mous_dir / f"{to_dir_mous_id(mous_id)}_listobs.json"
+    json_path = vm_mous_dir / f"{to_dir_mous_id(mous_id)}_listobs.json"
     json_write_payload(
-        payload,
-        json_output_path,
+        payload=payload,
+        output_path=json_path,
     )
 
+    # submit job to headless session
     try:
         launch_listobs_job_task(
             mous_id=mous_id,
-            platform_mous_dir=to_platform_path(vm_mous_dir),
             platform_db_path=to_platform_path(db_path),
+            platform_mous_dir=to_platform_path(vm_mous_dir),
             img=CASA_IMAGE_PIPE,
-            json_payload_path=str(to_platform_path(json_output_path)),
+            json_payload_path=str(to_platform_path(json_path)),
         )
+
     except Exception as e:
-        log.error(f"[{mous_id}] Error launching headless listobs job: {e}")
+        log.info(f"[{mous_id}] Error launching headless listobs job: {e}")
         with get_db_connection(db_path) as conn:
-            set_pre_selfcal_listobs_status_error(conn, mous_id)
+            update_pipeline_state_record(
+                conn, mous_id, pre_selfcal_listobs_status="error"
+            )
 
         log.error(f"[{mous_id}] Listobs(s) failed: {e}")
         raise

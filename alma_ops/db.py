@@ -1,18 +1,50 @@
-# alma_ops/db.py
+"""
+db.py
+--------------------
+Database operations for ALMA MOUS and pipeline state management.
+"""
+
+# ---------------------------------------------------------------------
+# imports
+# ---------------------------------------------------------------------
+
 import json
 import re
 import sqlite3
 from contextlib import contextmanager
 
+# =====================================================================
+# Fetching and executing database operations
+# =====================================================================
 
-def get_db_connection(db_path: str):
+
+def get_db_connection(db_path: str) -> sqlite3.Connection:
+    """Establishes a connection to a database.
+
+    Parameters
+    ----------
+    db_path : str
+        Path to the sqlite database.
+
+    Returns
+    -------
+    sqlite3.Connection
+        An open connection to the on-disk database.
+    """
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 @contextmanager
-def db_transaction(conn):
+def db_transaction(conn: sqlite3.Connection):
+    """Commits any pending transactions to the database.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        An open connection to the on-disk database.
+    """
     try:
         yield
         conn.commit()
@@ -21,72 +53,270 @@ def db_transaction(conn):
         raise
 
 
-def db_fetch_one(conn, query, params=()):
+def db_fetch_one(
+    conn: sqlite3.Connection, query: str, params: tuple = ()
+) -> sqlite3.Row | None:
+    """Fetches a single row, given the query and parameters.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        An open connection to the on-disk database.
+    query : str
+        The SQL query to execute.
+    params : tuple, optional
+        Parameters to substitute into the SQL query, by default ().
+
+    Returns
+    -------
+    sqlite3.Row | None
+        A single row from the query result, or None if no rows match.
+    """
     cur = conn.execute(query, params)
     return cur.fetchone()
 
 
-def db_fetch_all(conn, query, params=()):
+def db_fetch_all(
+    conn: sqlite3.Connection, query: str, params: tuple = ()
+) -> list[sqlite3.Row]:
+    """Fetches all rows, given the query and parameters.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        An open connection to the on-disk database.
+    query : str
+        The SQL query to execute.
+    params : tuple, optional
+        Parameters to substitute into the SQL query, by default ().
+
+    Returns
+    -------
+    list
+        A list of all the sqlite3.Row objects from the query result.
+    """
     cur = conn.execute(query, params)
     return cur.fetchall()
 
 
-def db_execute(conn, query, params=(), commit=False):
+def db_execute(
+    conn: sqlite3.Connection, query: str, params: tuple = (), commit: bool = False
+):
+    """Executes the SQL query.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        An open connection to the on-disk database.
+    query : str
+        The SQL query to execute.
+    params : tuple, optional
+        Parameters to substitute into the SQL query, by default ().
+    commit : bool, optional
+        Whether to commit the transaction, by default False
+    """
     conn.execute(query, params)
     if commit:
         conn.commit()
 
 
-# ---------------------
-# mous and pipeline state getters
-# ---------------------
+def parse_json_safe(value):
+    """Parses a JSON string safely, returning None if the input is None,
+    or returning the original value if it is not valid JSON.
+    """
+    if value is None:
+        return None
+
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return value
 
 
-def get_mous_record(conn, mous_id: str):
-    return db_fetch_one(conn, "SELECT * FROM mous WHERE mous_id=?", (mous_id,))
+# =====================================================================
+# Record Getters/Setters
+# =====================================================================
 
 
-def get_pipeline_state_record(conn, mous_id: str):
-    return db_fetch_one(
-        conn, "SELECT * FROM pipeline_state WHERE mous_id=?", (mous_id,)
-    )
+def get_mous_record(conn: sqlite3.Connection, mous_id: str) -> sqlite3.Row | None:
+    """Fetches the row from the mous table for a given mous_id.
 
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        An open connection to the on-disk database.
+    mous_id : str
+        The MOUS ID to query.
 
-def get_pipeline_state_download_url(conn, mous_id: str) -> str:
-    row = db_fetch_one(
-        conn, "SELECT download_url FROM pipeline_state WHERE mous_id=?", (mous_id,)
-    )
-    return row["download_url"] if row else None
-
-
-def get_pipeline_state_mous_directory(conn, mous_id: str) -> str:
-    row = db_fetch_one(
-        conn, "SELECT mous_directory FROM pipeline_state WHERE mous_id=?", (mous_id,)
-    )
-    return row["mous_directory"] if row else None
-
-
-def get_pipeline_state_calibrated_products(
-    conn, mous_id: str
-) -> str | list[str] | None:
+    Returns
+    -------
+    sqlite3.Row | None
+        A single row from the mous table, or None if no rows match.
+    """
     row = db_fetch_one(
         conn,
-        "SELECT calibrated_products FROM pipeline_state WHERE mous_id=?",
+        "SELECT * FROM mous WHERE mous_id=?",
         (mous_id,),
     )
-    if row and row["calibrated_products"]:
-        try:
-            return json.loads(row["calibrated_products"])
-        except json.JSONDecodeError:
-            return row["calibrated_products"]
-    return None
+    return row if row else None
 
 
-def get_mous_targets(conn, mous_id: str):
+def get_pipeline_state_record(
+    conn: sqlite3.Connection, mous_id: str
+) -> sqlite3.Row | None:
+    """Fetches the row from the pipeline_state table for a given mous_id.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        An open connection to the on-disk database.
+    mous_id : str
+        The MOUS ID to query.
+
+    Returns
+    -------
+    sqlite3.Row | None
+        A single row from the pipeline_state table, or None if no rows match.
+    """
+    row = db_fetch_one(
+        conn,
+        "SELECT * FROM pipeline_state WHERE mous_id=?",
+        (mous_id,),
+    )
+    return row if row else None
+
+
+def update_pipeline_state_record(conn: sqlite3.Connection, mous_id: str, **fields):
+    """Updates one or more fields in the pipeline_state table.
+    Automatically JSON-serializes lists and dictionaries for TEXT-based fields.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        An open connection to the on-disk database.
+    mous_id : str
+        The MOUS ID to query.
+    **fields
+        Key-value pairs of fields to update.
+    """
+    if not fields:
+        return
+
+    # serialize lists and dicts to JSON strings
+    serialized_fields = {
+        k: json.dumps(v) if isinstance(v, (list, dict)) else v
+        for k, v in fields.items()
+    }
+
+    cols = ", ".join(f"{k}=?" for k in serialized_fields)
+    values = list(serialized_fields.values()) + [mous_id]
+
+    with db_transaction(conn):
+        conn.execute(f"UPDATE pipeline_state SET {cols} WHERE mous_id=?", values)
+
+
+def update_mous_record(conn: sqlite3.Connection, mous_id: str, **fields):
+    """Updates one or more fields in the mous table.
+    Automatically JSON-serializes lists and dictionaries for TEXT-based fields.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        An open connection to the on-disk database.
+    mous_id : str
+        The MOUS ID to query.
+    **fields
+        Key-value pairs of fields to update.
+    """
+    if not fields:
+        return
+
+    # serialize lists and dicts to JSON strings
+    serialized_fields = {
+        k: json.dumps(v) if isinstance(v, (list, dict)) else v
+        for k, v in fields.items()
+    }
+
+    cols = ", ".join(f"{k}=?" for k in serialized_fields)
+    values = list(serialized_fields.values()) + [mous_id]
+
+    with db_transaction(conn):
+        conn.execute(f"UPDATE mous SET {cols} WHERE mous_id=?", values)
+
+
+def get_pipeline_state_record_column_value(
+    conn: sqlite3.Connection, mous_id: str, column: str
+) -> dict | list | None:
+    """Fetches a column value from the pipeline_state table for a given mous_id.
+    Attemps a json.loads() to parse the information from the specified column to catch
+    any JSON-valid data, or returns the raw value if not JSON.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        An open connection to the on-disk database.
+    mous_id : str
+        The MOUS ID to query.
+    column : str
+        The column name to fetch.
+
+    Returns
+    -------
+    The parsed JSON object from the specified column, or None if no rows match.
+
+    Raises
+    ------
+    ValueError
+        If the specified column contains invalid JSON.
+    """
+    row = get_pipeline_state_record(conn, mous_id)
+
+    if not row:
+        return None
+
+    raw = row[column]
+
+    return parse_json_safe(raw)
+
+
+# =====================================================================
+# Getters
+# =====================================================================
+
+
+def get_mous_targets(conn: sqlite3.Connection, mous_id: str) -> list[sqlite3.Row]:
+    """Fetches all target rows for a given mous_id.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        An open connection to the on-disk database.
+    mous_id : str
+        The MOUS ID to query.
+
+    Returns
+    -------
+    list[sqlite3.Row]
+        A list of all target rows for the given mous_id.
+    """
     return db_fetch_all(conn, "SELECT * FROM targets WHERE mous_id=?", (mous_id,))
 
 
-def get_unique_target_names(conn, mous_id: str):
+def get_unique_target_names(conn: sqlite3.Connection, mous_id: str) -> list[str]:
+    """Fetches all unique target names for a given mous_id.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        An open connection to the on-disk database.
+    mous_id : str
+        The MOUS ID to query.
+
+    Returns
+    -------
+    list[str]
+        A list of unique target names for the given mous_id.
+    """
     rows = db_fetch_all(
         conn,
         "SELECT DISTINCT alma_source_name FROM targets WHERE mous_id=?",
@@ -95,21 +325,47 @@ def get_unique_target_names(conn, mous_id: str):
     return [r["alma_source_name"] for r in rows]
 
 
-def get_mous_asdms_from_targets(conn, mous_id: str):
+def get_mous_asdms_from_targets(conn: sqlite3.Connection, mous_id: str) -> list[str]:
+    """Fetches all unique ASDM UIDs from the targets table for a given mous_id.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        An open connection to the on-disk database.
+    mous_id : str
+        The MOUS ID to query.
+
+    Returns
+    -------
+    list[str]
+        A list of unique ASDM UIDs for the given mous_id.
+    """
     rows = db_fetch_all(
         conn, "SELECT DISTINCT asdm_uid FROM targets WHERE mous_id=?", (mous_id,)
     )
     return [r["asdm_uid"] for r in rows if r["asdm_uid"]]
 
 
-def get_mous_expected_asdms(conn, mous_id: str) -> int:
-    row = db_fetch_one(conn, "SELECT num_asdms FROM mous WHERE mous_id=?", (mous_id,))
-    if row is None or row["num_asdms"] is None:
-        return 0
-    return int(row["num_asdms"])
+def get_mous_spw_mapping(
+    conn: sqlite3.Connection, mous_id: str
+) -> dict[str, list[int]]:
+    """Constructs a mapping of source names to their associated spectral windows (SPWs)
+    for a given mous_id.
 
+    Will apply any user-defined SPW remapping if present.
 
-def get_mous_spw_mapping(conn, mous_id: str) -> dict[str, list[int]]:
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        An open connection to the on-disk database.
+    mous_id : str
+        The MOUS ID to query.
+
+    Returns
+    -------
+    dict[str, list[int]]
+        A dictionary mapping source names to lists of associated SPWs.
+    """
     rows = db_fetch_all(
         conn, "SELECT alma_source_name, obs_id FROM targets WHERE mous_id=?", (mous_id,)
     )
@@ -118,6 +374,7 @@ def get_mous_spw_mapping(conn, mous_id: str) -> dict[str, list[int]]:
     spw_pattern = re.compile(r"\.spw\.(\d+)$")
     spw_map = {}
 
+    # checks if any user-defined spw remapping is set for the MOUS
     spw_remap = get_spw_remap(conn, mous_id)
 
     for source, obs_id in rows:
@@ -137,7 +394,27 @@ def get_mous_spw_mapping(conn, mous_id: str) -> dict[str, list[int]]:
     return {k: sorted(v) for k, v in spw_map.items()}
 
 
-def get_spw_remap(conn, mous_id: str) -> dict:
+def get_spw_remap(conn: sqlite3.Connection, mous_id: str) -> dict | None:
+    """Fetches the SPW remapping dictionary for a given mous_id, if it exists.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        An open connection to the on-disk database.
+    mous_id : str
+        The MOUS ID to query.
+
+    Returns
+    -------
+    dict | None
+        A dictionary mapping original SPW integers to remapped SPW integers,
+        or None if no remapping is defined.
+
+    Raises
+    ------
+    ValueError
+        If the raw_data_spectral_remap entry contains invalid JSON.
+    """
     row = db_fetch_one(
         conn,
         "SELECT raw_data_spectral_remap FROM pipeline_state WHERE mous_id=?",
@@ -147,268 +424,13 @@ def get_spw_remap(conn, mous_id: str) -> dict:
     if not row:
         return None
 
-    # check if remap exists, else return None
-    if row["raw_data_spectral_remap"] is not None:
-        try:
-            raw = json.loads(row["raw_data_spectral_remap"])
-            return {int(k): int(v) for k, v in raw.items()}
+    value = row["raw_data_spectral_remap"]
+    if value is None:
+        return None
 
-        except json.JSONDecodeError:
-            raise ValueError("Invalid JSON in raw_data_spectral_remap")
+    try:
+        raw = json.loads(value)
+    except json.JSONDecodeError as e:
+        raise ValueError("Invalid JSON in raw_data_spectral_remap") from e
 
-    else:
-        raw = None
-
-
-def get_pipeline_state_preferred_datacolumn(conn, mous_id: str):
-    row = db_fetch_one(
-        conn,
-        "SELECT preferred_datacolumn FROM pipeline_state WHERE mous_id=?",
-        (mous_id,),
-    )
-
-    if not row:
-        raise ValueError("MOUS ID not found in pipeline_state table")
-
-    # return the preferred_datacolumn value
-    return row["preferred_datacolumn"]
-
-
-def get_pipeline_state_split_products_path(
-    conn, mous_id: str
-) -> str | list[str] | None:
-    row = db_fetch_one(
-        conn,
-        "SELECT split_products_path FROM pipeline_state WHERE mous_id=?",
-        (mous_id,),
-    )
-    if row and row["split_products_path"]:
-        try:
-            return json.loads(row["split_products_path"])
-        except json.JSONDecodeError:
-            return row["split_products_path"]
-    return None
-
-
-# ---------------------
-# mous and pipeline state setters
-# ---------------------
-
-
-def set_download_status_pending(conn, mous_id: str):
-    """Sets only the status to pending."""
-    with db_transaction(conn):
-        conn.execute(
-            """
-            UPDATE pipeline_state 
-            SET download_status=?
-            WHERE mous_id=?
-        """,
-            ("pending", mous_id),
-        )
-
-
-def set_download_status_error(conn, mous_id: str):
-    """Sets only the status to error."""
-    with db_transaction(conn):
-        conn.execute(
-            """
-            UPDATE pipeline_state 
-            SET download_status=?
-            WHERE mous_id=?
-        """,
-            ("error", mous_id),
-        )
-
-
-def set_download_status_in_progress(conn, mous_id: str, timestamp=False):
-    """Sets only the status to in_progress (with optional timestamp)."""
-
-    if timestamp:
-        with db_transaction(conn):
-            conn.execute(
-                """
-                UPDATE pipeline_state 
-                SET download_status=?,
-                download_started_at = CURRENT_TIMESTAMP
-                WHERE mous_id=?
-            """,
-                ("in_progress", mous_id),
-            )
-    else:
-        with db_transaction(conn):
-            conn.execute(
-                """
-                UPDATE pipeline_state 
-                SET download_status=?
-                WHERE mous_id=?
-            """,
-                ("in_progress", mous_id),
-            )
-
-
-def set_download_status_complete(conn, mous_id: str, timestamp=False):
-    """Sets only the status to complete (with optional timestamp)."""
-
-    if timestamp:
-        with db_transaction(conn):
-            conn.execute(
-                """
-                UPDATE pipeline_state 
-                SET download_status=?,
-                download_completed_at = CURRENT_TIMESTAMP
-                WHERE mous_id=?
-            """,
-                ("complete", mous_id),
-            )
-    else:
-        with db_transaction(conn):
-            conn.execute(
-                """
-                UPDATE pipeline_state 
-                SET download_status=?
-                WHERE mous_id=?
-            """,
-                ("complete", mous_id),
-            )
-
-
-def set_calibrated_products(conn, mous_id: str, calibrated_products: str | list):
-    """Sets the calibrated products entry for a given mous_id."""
-
-    # Convert to JSON string if it's a list
-    if isinstance(calibrated_products, list):
-        products_str = json.dumps(calibrated_products)
-    else:
-        products_str = calibrated_products
-
-    with db_transaction(conn):
-        conn.execute(
-            """
-            UPDATE pipeline_state 
-            SET calibrated_products=?
-            WHERE mous_id=?
-        """,
-            (products_str, mous_id),
-        )
-
-
-def set_mous_directory(conn, mous_id: str, mous_directory: str):
-    """Sets the mous directory entry for a given mous_id."""
-    with db_transaction(conn):
-        conn.execute(
-            """
-            UPDATE pipeline_state 
-            SET mous_directory=?
-            WHERE mous_id=?
-        """,
-            (mous_directory, mous_id),
-        )
-
-
-def set_pre_selfcal_split_status_pending(conn, mous_id: str):
-    """Sets only the status to pending."""
-    with db_transaction(conn):
-        conn.execute(
-            """
-            UPDATE pipeline_state 
-            SET pre_selfcal_split_status=?
-            WHERE mous_id=?
-        """,
-            ("pending", mous_id),
-        )
-
-
-def set_pre_selfcal_split_status_error(conn, mous_id: str):
-    """Sets only the status to error."""
-    with db_transaction(conn):
-        conn.execute(
-            """
-            UPDATE pipeline_state 
-            SET pre_selfcal_split_status=?
-            WHERE mous_id=?
-        """,
-            ("error", mous_id),
-        )
-
-
-def set_pre_selfcal_split_status_in_progress(conn, mous_id: str):
-    """Sets only the status to in_progress."""
-
-    with db_transaction(conn):
-        conn.execute(
-            """
-            UPDATE pipeline_state 
-            SET pre_selfcal_split_status=?
-            WHERE mous_id=?
-        """,
-            ("in_progress", mous_id),
-        )
-
-
-def set_pre_selfcal_split_status_complete(conn, mous_id: str):
-    """Sets only the status to complete."""
-
-    with db_transaction(conn):
-        conn.execute(
-            """
-            UPDATE pipeline_state 
-            SET pre_selfcal_split_status=?
-            WHERE mous_id=?
-        """,
-            ("complete", mous_id),
-        )
-
-
-def set_pre_selfcal_listobs_status_pending(conn, mous_id: str):
-    """Sets only the status to pending."""
-    with db_transaction(conn):
-        conn.execute(
-            """
-            UPDATE pipeline_state 
-            SET pre_selfcal_listobs_status=?
-            WHERE mous_id=?
-        """,
-            ("pending", mous_id),
-        )
-
-
-def set_pre_selfcal_listobs_status_error(conn, mous_id: str):
-    """Sets only the status to error."""
-    with db_transaction(conn):
-        conn.execute(
-            """
-            UPDATE pipeline_state 
-            SET pre_selfcal_listobs_status=?
-            WHERE mous_id=?
-        """,
-            ("error", mous_id),
-        )
-
-
-def set_pre_selfcal_listobs_status_in_progress(conn, mous_id: str):
-    """Sets only the status to in_progress."""
-
-    with db_transaction(conn):
-        conn.execute(
-            """
-            UPDATE pipeline_state 
-            SET pre_selfcal_listobs_status=?
-            WHERE mous_id=?
-        """,
-            ("in_progress", mous_id),
-        )
-
-
-def set_pre_selfcal_listobs_status_complete(conn, mous_id: str):
-    """Sets only the status to complete."""
-
-    with db_transaction(conn):
-        conn.execute(
-            """
-            UPDATE pipeline_state 
-            SET pre_selfcal_listobs_status=?
-            WHERE mous_id=?
-        """,
-            ("complete", mous_id),
-        )
+    return {int(k): int(v) for k, v in raw.items()}

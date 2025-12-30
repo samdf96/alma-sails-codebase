@@ -1,24 +1,23 @@
 """
 casa_driver.py
 --------------------
-Only works in a *CASA environment*, casatask or casatools imports not needed.
-This script is intended to be used as the following from a canfar.sessions create() function:
+Script called by headless session creation to run CASA tasks.
 
-sessions.create(
-    name=job_name
-    image=SOME_CASA_IMAGE
-    cmd="casa",
-    args="--logfile [logfilepath] -c [casa_driver_filepath] --json-payload [jsonfilepath]
-)
+*** This script only works in a valid CASA environment. ***
+
+Usage:
+------
+# called via the following command
+casa --logfile "$CASA_LOGFILE_PATH" -c "$CASA_DRIVER_SCRIPT_PATH" --json-payload "$JSON_PAYLOAD_PATH"
 """
 # ruff: noqa: F821
 
 import argparse
 import json
 
-# ---------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------
+# =====================================================================
+# CLI Entry
+# =====================================================================
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(

@@ -16,7 +16,7 @@ from bootstrap import setup_path
 setup_path()
 
 # ---------------------------------------------------------------------
-# Standard imports
+# imports
 # ---------------------------------------------------------------------
 import argparse
 import json
@@ -27,10 +27,6 @@ from alma_ops.db import (
     get_db_connection,
     get_pipeline_state_record,
 )
-
-# ---------------------------------------------------------------------
-# Alma Ops imports
-# ---------------------------------------------------------------------
 from alma_ops.logging import get_logger
 from alma_ops.utils import to_db_mous_id
 
@@ -66,9 +62,7 @@ def main():
     )
     args = parser.parse_args()
 
-    # ---------------------------------------------------------------
-    # Normalize MOUS ID
-    # ---------------------------------------------------------------
+    # normalize MOUS ID
     try:
         normalized = to_db_mous_id(args.mous)
         log.info(f"Normalized MOUS ID → {normalized}")
@@ -76,9 +70,7 @@ def main():
         log.error(f"Invalid MOUS ID format: {e}")
         return
 
-    # ---------------------------------------------------------------
-    # Connect to DB
-    # ---------------------------------------------------------------
+    # get pipeline state record
     with get_db_connection(DB_PATH) as conn:
         # ensure MOUS exists
         record = get_pipeline_state_record(conn, normalized)
@@ -86,16 +78,16 @@ def main():
             log.error(f"MOUS {normalized} not found in database.")
             return
 
-        # -----------------------------------------------------------
-        # Update field
-        # -----------------------------------------------------------
+        # attempt to parse remap
         try:
             remap = parse_spw_map(args.map)
         except ValueError:
             raise
 
+        # build the JSON payload
         payload = json.dumps(remap, indent=2)
 
+        # update the database
         db_execute(
             conn,
             """

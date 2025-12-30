@@ -25,6 +25,9 @@ setup_path()
 import argparse
 from pathlib import Path
 
+# casa specific imports
+from casatools import table
+
 from alma_ops.config import DB_PATH
 from alma_ops.db import (
     get_db_connection,
@@ -32,9 +35,6 @@ from alma_ops.db import (
     get_pipeline_state_record,
 )
 from alma_ops.logging import get_logger
-
-# casa specific imports
-from casatools import table
 
 # ---------------------------------------------------------------------
 # Logging

@@ -31,10 +31,25 @@ from alma_ops.logging import get_logger  # noqa: E402
 # ---------------------------------------------------------------------
 log = get_logger("db_populate_metadata")
 
+
 def create_db(
     csv_path: str,
     database_path: str,
 ):
+    """Populate the database with metadata from the given CSV file.
+
+    Parameters
+    ----------
+    csv_path : str
+        Path to the metadata CSV file.
+    database_path : str
+        Path to the SQLite database file (must exist).
+
+    Raises
+    ------
+    ValueError
+        If required columns are missing from the CSV file.
+    """
     # load csv file into dataframe
     df = pd.read_csv(csv_path)
 
@@ -50,7 +65,7 @@ def create_db(
         "LAS_arcsec": "las_arcsec",
         "FoV_arcsec": "fov_arcsec",
         "s_fov": "s_fov_deg",
-        "type": "obs_type" # prevents clashes with type keyword
+        "type": "obs_type",  # prevents clashes with type keyword
     }
     df = df.rename(columns=rename_map)
 
@@ -58,7 +73,9 @@ def create_db(
     required = ["mous_id", "project_code", "alma_source_name"]
     missing = [c for c in required if c not in df.columns]
     if missing:
-        raise ValueError(f"❌ Missing required columns in CSV after normalization/rename: {missing}")
+        raise ValueError(
+            f"❌ Missing required columns in CSV after normalization/rename: {missing}"
+        )
     log.info("✅ All required columns found!")
 
     # Connect to DB and enable foreign keys
@@ -69,9 +86,19 @@ def create_db(
     # Projects
     # --------------------------
     projects_cols = [
-        "project_code", "proposal_id", "proposal_abstract", "proposal_authors",
-        "pi_userid", "pi_name", "scientific_category", "bib_reference",
-        "pub_title", "first_author", "authors", "pub_abstract", "publication_year"
+        "project_code",
+        "proposal_id",
+        "proposal_abstract",
+        "proposal_authors",
+        "pi_userid",
+        "pi_name",
+        "scientific_category",
+        "bib_reference",
+        "pub_title",
+        "first_author",
+        "authors",
+        "pub_abstract",
+        "publication_year",
     ]
     # Only keep those that exist in the CSV to avoid KeyError for absent optional columns
     projects_present = [c for c in projects_cols if c in df.columns]
@@ -82,12 +109,29 @@ def create_db(
     # MOUS / observations
     # --------------------------
     mous_cols = [
-        "mous_id", "project_code", "group_ous_uid",
-        "obs_collection", "collections", "obs_publisher_did", "facility_name",
-        "instrument_name", "antenna_arrays", "dataproduct_type", "calib_level",
-        "access_url", "access_format", "data_rights", "obs_title", "scan_intent",
-        "obs_type", "obs_creator_name", "obs_release_date", "qa2_passed", "pwv",
-        "scientific_category", "science_keyword"
+        "mous_id",
+        "project_code",
+        "group_ous_uid",
+        "obs_collection",
+        "collections",
+        "obs_publisher_did",
+        "facility_name",
+        "instrument_name",
+        "antenna_arrays",
+        "dataproduct_type",
+        "calib_level",
+        "access_url",
+        "access_format",
+        "data_rights",
+        "obs_title",
+        "scan_intent",
+        "obs_type",
+        "obs_creator_name",
+        "obs_release_date",
+        "qa2_passed",
+        "pwv",
+        "scientific_category",
+        "science_keyword",
     ]
     mous_present = [c for c in mous_cols if c in df.columns]
     mous_df = df[mous_present].drop_duplicates(subset=["mous_id"])
@@ -98,16 +142,48 @@ def create_db(
     # Targets
     # --------------------------
     targets_cols_original = [
-        "mous_id", "alma_source_name", "obs_id", "ra_deg", "dec_deg",
-        "gal_longitude", "gal_latitude", "ang_res_arcsec", "las_arcsec",
-        "fov_arcsec", "is_mosaic", "min_freq_GHz", "max_freq_GHz",
-        "central_freq_GHz", "bandwidth_GHz", "freq_res_kHz", "vel_res_kms",
-        "em_min", "em_max", "em_res_power", "em_xel", "pwv", "asdm_uid",
-        "cont_sens_bandwidth", "line_sens_10kms", "line_sens_native",
-        "t_min", "t_max", "t_exptime", "t_resolution", "spatial_scale_max",
-        "s_fov_deg", "s_region", "s_resolution", "band_list", "frequency_support",
-        "pol_states", "scientific_category", "science_keyword", "qa2_passed",
-        "obs_type", "scan_intent"
+        "mous_id",
+        "alma_source_name",
+        "obs_id",
+        "ra_deg",
+        "dec_deg",
+        "gal_longitude",
+        "gal_latitude",
+        "ang_res_arcsec",
+        "las_arcsec",
+        "fov_arcsec",
+        "is_mosaic",
+        "min_freq_GHz",
+        "max_freq_GHz",
+        "central_freq_GHz",
+        "bandwidth_GHz",
+        "freq_res_kHz",
+        "vel_res_kms",
+        "em_min",
+        "em_max",
+        "em_res_power",
+        "em_xel",
+        "pwv",
+        "asdm_uid",
+        "cont_sens_bandwidth",
+        "line_sens_10kms",
+        "line_sens_native",
+        "t_min",
+        "t_max",
+        "t_exptime",
+        "t_resolution",
+        "spatial_scale_max",
+        "s_fov_deg",
+        "s_region",
+        "s_resolution",
+        "band_list",
+        "frequency_support",
+        "pol_states",
+        "scientific_category",
+        "science_keyword",
+        "qa2_passed",
+        "obs_type",
+        "scan_intent",
     ]
     targets_present = [c for c in targets_cols_original if c in df.columns]
 
@@ -133,11 +209,11 @@ def create_db(
 
     pipeline_state_df.to_sql("pipeline_state", conn, if_exists="append", index=False)
 
-
     # Finalize
     conn.commit()
     conn.close()
     log.info(f"✅ Data successfully loaded into {database_path}")
+
 
 # =====================================================================
 # Command-line interface
@@ -149,7 +225,4 @@ if __name__ == "__main__":
     parser.add_argument("--db-path", default=DB_PATH)
     args = parser.parse_args()
 
-    create_db(
-        csv_path=args.csv_path,
-        database_path=args.db_path
-    )
+    create_db(csv_path=args.csv_path, database_path=args.db_path)

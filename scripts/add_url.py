@@ -6,11 +6,6 @@ Add or update a MOUS download URL in the database.
 Usage:
     python add_mous_url.py uid___A002_X1234_Xabc https://...
     python add_mous_url.py uid://A002/X1234/Xabc https://...
-
-This will:
-  • Normalize the MOUS ID (uid___ → uid:// form)
-  • Verify the MOUS exists
-  • Update the download_url field
 """
 # ruff: noqa: E402
 
@@ -22,7 +17,7 @@ from bootstrap import setup_path
 setup_path()
 
 # ---------------------------------------------------------------------
-# Standard imports
+# imports
 # ---------------------------------------------------------------------
 import argparse
 
@@ -32,10 +27,6 @@ from alma_ops.db import (
     get_db_connection,
     get_pipeline_state_record,
 )
-
-# ---------------------------------------------------------------------
-# Alma Ops imports
-# ---------------------------------------------------------------------
 from alma_ops.logging import get_logger
 from alma_ops.utils import to_db_mous_id
 
@@ -44,16 +35,12 @@ from alma_ops.utils import to_db_mous_id
 # ---------------------------------------------------------------------
 log = get_logger("add_mous_url")
 
-# =====================================================================
-# Script entry point
-# =====================================================================
-
 
 def main():
     parser = argparse.ArgumentParser(
         description="Add/update the download URL for a given MOUS."
     )
-    parser.add_argument("mous", help="MOUS ID (uid___A/B/C or uid://A/B/C format)")
+    parser.add_argument("mous", help="MOUS ID (uid___A_B_C or uid://A/B/C format)")
     parser.add_argument("download_url", help="Download URL to store")
     parser.add_argument(
         "--db-path", default=DB_PATH, help=f"Path to database (default: {DB_PATH})"
@@ -61,9 +48,7 @@ def main():
 
     args = parser.parse_args()
 
-    # ---------------------------------------------------------------
-    # Normalize MOUS ID
-    # ---------------------------------------------------------------
+    # normalize MOUS ID
     try:
         normalized = to_db_mous_id(args.mous)
         log.info(f"Normalized MOUS ID → {normalized}")
@@ -71,9 +56,7 @@ def main():
         log.error(f"Invalid MOUS ID format: {e}")
         return
 
-    # ---------------------------------------------------------------
-    # Connect to DB
-    # ---------------------------------------------------------------
+    # connect to DB
     with get_db_connection(args.db_path) as conn:
         # Ensure MOUS exists
         record = get_pipeline_state_record(conn, normalized)
@@ -81,9 +64,7 @@ def main():
             log.error(f"No MOUS found matching ID: {normalized}")
             return
 
-        # -----------------------------------------------------------
-        # Update field
-        # -----------------------------------------------------------
+        # Update download URL
         db_execute(
             conn,
             """

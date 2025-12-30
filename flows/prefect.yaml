@@ -45,7 +45,7 @@ deployments:
     work_queue_name: null
     job_variables: {}
 
-- name: mous-downloader
+- name: mous-download
   version: null
   tags: []
   description: null
@@ -64,7 +64,7 @@ deployments:
   description: null
   schedule: {}
   flow_name: null
-  entrypoint: mous_post_download_organize.py:post_download_organize
+  entrypoint: mous_post_download_organize.py:post_download_organize_flow
   parameters: {}
   work_pool:
     name: vm-runs
@@ -84,13 +84,26 @@ deployments:
     work_queue_name: null
     job_variables: {}
 
-- name: mous-listobs
+- name: post-split-organize
   version: null
   tags: []
   description: null
   schedule: {}
   flow_name: null
-  entrypoint: mous_post_split_listobs.py:mous_listobs_flow
+  entrypoint: mous_post_split_organize.py:post_split_organize_flow
+  parameters: {}
+  work_pool:
+    name: headless-runs
+    work_queue_name: null
+    job_variables: {}
+
+- name: post-split-listobs
+  version: null
+  tags: []
+  description: null
+  schedule: {}
+  flow_name: null
+  entrypoint: mous_post_split_listobs.py:post_split_listobs_flow
   parameters: {}
   work_pool:
     name: headless-runs

@@ -1,16 +1,21 @@
 #!/bin/bash
 # run_download.sh
-# Usage: run_download.sh <download_dir> <url> <db_path> <mous_id>
+# Usage: run_download.sh <mous_id> <db_path> <download_dir> <url>
 
 set -uo pipefail
 
 # -------------------------
 # Positional arguments
 # -------------------------
-DOWNLOAD_DIR="$1"
-URL="$2"
-DB_PATH="$3"
-MOUS_ID="$4"
+MOUS_ID="$1"
+DB_PATH="$2"
+DOWNLOAD_DIR="$3"
+URL="$4"
+
+echo "[INFO] Starting download for MOUS ID: $MOUS_ID"
+echo "[INFO] Database path: $DB_PATH"
+echo "[INFO] Download directory: $DOWNLOAD_DIR"
+echo "[INFO] URL: $URL"
 
 # Move into the download directory
 cd "$DOWNLOAD_DIR"

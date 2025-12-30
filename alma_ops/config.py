@@ -1,4 +1,13 @@
-# config.py
+"""
+config.py
+--------------------
+Central configuration for ALMA-SAILS project.
+"""
+
+# ---------------------------------------------------------------------
+# imports
+# ---------------------------------------------------------------------
+
 from pathlib import Path
 
 # Root directory of the project (ALMA-SAILS/)
@@ -19,21 +28,25 @@ SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 # =============================================================================
 
 # What the VM sees vs what the platform sees
-VM_MOUNT_PREFIX = "/home/ubuntu/canfar_arc/projects/ALMA-SAILS"  # Adjust to your actual mount
+VM_MOUNT_PREFIX = "/home/ubuntu/canfar_arc/projects/ALMA-SAILS"
 PLATFORM_PREFIX = "/arc/projects/ALMA-SAILS"
 
 
 def to_platform_path(path: Path | str | list[Path | str]) -> str | list[str]:
-    """
-    Convert VM mount path(s) to platform native path(s) for headless sessions.
-    
-    Args:
-        path: Single path or list of paths to convert.
-        
-    Returns:
-        Single string or list of strings (matches input type)
-    
-    Example:
+    """Convert VM mount path(s) to platform native path(s).
+
+    Parameters
+    ----------
+    path : Path | str | list[Path  |  str]
+        Single path or list of paths to convert.
+
+    Returns
+    -------
+    str | list[str]
+        Platform native path(s) corresponding to input.
+
+    Example
+    -------
         Single: /mnt/pspace/datasets/uid_123 → /arc/projects/ALMA-SAILS/datasets/uid_123
         List: ["/mnt/pspace/a", "/mnt/pspace/b"] → ["/arc/projects/ALMA-SAILS/a", ...]
     """
@@ -44,16 +57,20 @@ def to_platform_path(path: Path | str | list[Path | str]) -> str | list[str]:
 
 
 def to_vm_path(path: str | list[str]) -> Path | list[Path]:
-    """
-    Convert platform native path(s) to VM mount path(s).
-    
-    Args:
-        path: Single path or list of paths to convert.
-        
-    Returns:
-        Single Path or list of Paths (matches input type)
+    """Convert platform native path(s) to VM mount path(s).
 
-    Example:
+    Parameters
+    ----------
+    path : str | list[str]
+        Platform native path(s) to convert.
+
+    Returns
+    -------
+    Path | list[Path]
+        VM mount path(s) corresponding to input.
+
+    Example
+    -------
         Single: /arc/projects/ALMA-SAILS/datasets/uid_123 → /mnt/pspace/datasets/uid_123
         List: ["/arc/.../a", "/arc/.../b"] → [Path("/mnt/pspace/a"), ...]
     """
@@ -62,6 +79,7 @@ def to_vm_path(path: str | list[str]) -> Path | list[Path]:
     else:
         return Path(path.replace(PLATFORM_PREFIX, VM_MOUNT_PREFIX))
 
+
 # CASA Image to use for processing
 CASA_IMAGE = "images.canfar.net/casa-6/casa:6.6.4-34"
 CASA_IMAGE_PIPE = "images.canfar.net/casa-6/casa:6.5.4-9-pipeline"
@@ -69,6 +87,10 @@ WGET2_IMAGE = "images.canfar.net/skaha/astroml:25.09"
 
 # Auto Self-Calibration files
 AUTO_SELFCAL_DIR = PROJECT_ROOT / "auto_selfcal-1.3.1"
+
+# =====================================================================
+# CLI Entry
+# =====================================================================
 
 if __name__ == "__main__":
     print(f"PROJECT ROOT SET AS: {PROJECT_ROOT}")

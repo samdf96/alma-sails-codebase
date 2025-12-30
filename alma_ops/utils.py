@@ -1,20 +1,38 @@
-# alma_ops/utils.py
+"""
+utils.py
+--------------------
+Utility functions for ALMA dataset operations.
+"""
+
 
 def to_db_mous_id(mous_id: str) -> str:
-    """
-    Convert either:
-      • uid___A001_X123_Xabc
-      • uid://A001/X123/Xabc
-    into the canonical database form:
-      → uid://A001/X123/Xabc
+    """Converts a given mous_id to the database form.
+
+    Parameters
+    ----------
+    mous_id : str
+        The MOUS ID to convert. Can be in either filesystem form (uid___A001_X123_Xabc)
+        or database form (uid://A001/X123/Xabc).
+
+    Returns
+    -------
+    str
+        The MOUS ID in database form (uid://A001/X123/Xabc).
+
+    Raises
+    ------
+    ValueError
+        If the input MOUS ID cannot be interpreted.
+    ValueError
+        If the input MOUS ID is in an invalid format.
     """
     mous_id = mous_id.strip()
 
-    # Case 1: Already database form
+    # check if already in database form
     if mous_id.startswith("uid://"):
         return mous_id
 
-    # Case 2: Filesystem form → convert
+    # check if in filesystem form → convert
     if mous_id.startswith("uid___"):
         core = mous_id.replace("uid___", "")
         parts = core.split("_")
@@ -24,21 +42,35 @@ def to_db_mous_id(mous_id: str) -> str:
 
     raise ValueError(f"Cannot interpret MOUS ID: {mous_id}")
 
+
 def to_dir_mous_id(mous_id: str) -> str:
-    """
-    Convert either:
-      • uid___A001_X123_Xabc
-      • uid://A001/X123/Xabc
-    into the filesystem-safe format:
-      → uid___A001_X123_Xabc
+    """Converts a given mous_id to the directory form.
+
+    Parameters
+    ----------
+    mous_id : str
+        The MOUS ID to convert. Can be in either filesystem form (uid___A001_X123_Xabc)
+        or database form (uid://A001/X123/Xabc).
+
+    Returns
+    -------
+    str
+        The MOUS ID in directory form (uid___A001_X123_Xabc).
+
+    Raises
+    ------
+    ValueError
+        If the input MOUS ID cannot be interpreted.
+    ValueError
+        If the input MOUS ID is in an invalid format.
     """
     mous_id = mous_id.strip()
 
-    # Case 1: Already dir form
+    # check if already in directory form
     if mous_id.startswith("uid___"):
         return mous_id
 
-    # Case 2: Database form → convert
+    # check if in database form → convert
     if mous_id.startswith("uid://"):
         core = mous_id.replace("uid://", "")
         parts = core.split("/")
@@ -47,14 +79,3 @@ def to_dir_mous_id(mous_id: str) -> str:
         return "uid___" + "_".join(parts)
 
     raise ValueError(f"Cannot interpret MOUS ID: {mous_id}")
-
-
-
-def normalize_asdm_dir(asdm_uid: str) -> str:
-    """Convert uid://A002/Xce3de5/X6314 → uid___A002_Xce3de5_X6314."""
-    return normalize_mous_dir(asdm_uid)
-
-
-def uid_to_filename(uid: str, suffix: str = ".ms") -> str:
-    """Convert uid to safe filename like uid___...ms"""
-    return normalize_mous_dir(uid) + suffix
