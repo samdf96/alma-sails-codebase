@@ -346,11 +346,8 @@ def get_mous_asdms_from_targets(conn: sqlite3.Connection, mous_id: str) -> list[
     return [r["asdm_uid"] for r in rows if r["asdm_uid"]]
 
 
-def get_mous_spw_mapping(
-    conn: sqlite3.Connection, mous_id: str
-) -> dict[str, list[int]]:
-    """Constructs a mapping of source names to their associated spectral windows (SPWs)
-    for a given mous_id.
+def get_mous_spw_mapping(conn: sqlite3.Connection, mous_id: str) -> list[int]:
+    """Simply fetches all unique science SPW integers for a given mous_id.
 
     Will apply any user-defined SPW remapping if present.
 
@@ -363,21 +360,19 @@ def get_mous_spw_mapping(
 
     Returns
     -------
-    dict[str, list[int]]
-        A dictionary mapping source names to lists of associated SPWs.
+    list[int]
+        A sorted list of unique SPW integers for the given mous_id.
     """
-    rows = db_fetch_all(
-        conn, "SELECT alma_source_name, obs_id FROM targets WHERE mous_id=?", (mous_id,)
-    )
+    rows = db_fetch_all(conn, "SELECT obs_id FROM targets WHERE mous_id=?", (mous_id,))
 
-    # setting spw pattern matching
+    # pattern to extract SPW number
     spw_pattern = re.compile(r"\.spw\.(\d+)$")
-    spw_map = {}
+    spws = set()
 
     # checks if any user-defined spw remapping is set for the MOUS
     spw_remap = get_spw_remap(conn, mous_id)
 
-    for source, obs_id in rows:
+    for (obs_id,) in rows:
         m = spw_pattern.search(obs_id or "")
 
         if not m:
@@ -386,12 +381,12 @@ def get_mous_spw_mapping(
         spw = int(m.group(1))
 
         # remap if needed
-        if spw_remap and spw in spw_remap:
-            spw = spw_remap[spw]
+        if spw_remap and str(spw) in spw_remap:
+            spw = spw_remap[str(spw)]
 
-        spw_map.setdefault(source, set()).add(spw)
+        spws.add(spw)
 
-    return {k: sorted(v) for k, v in spw_map.items()}
+    return sorted(spws)
 
 
 def get_spw_remap(conn: sqlite3.Connection, mous_id: str) -> dict | None:

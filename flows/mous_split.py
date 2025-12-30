@@ -152,12 +152,12 @@ def build_split_job_payload(
 
     # get spw mapping from database
     with get_db_connection(vm_db_path) as conn:
-        spw_map = get_mous_spw_mapping(conn, mous_id)
+        spws = get_mous_spw_mapping(conn, mous_id)
 
-        if not spw_map:
+        if not spws:
             raise RuntimeError(f"No targets found for {mous_id}.")
 
-        log.info(f"[{mous_id}] Found {len(spw_map)} targets.")
+        log.info(f"[{mous_id}] Science SPWs found: {spws}")
 
     # get preferred datacolumn
     with get_db_connection(vm_db_path) as conn:
@@ -179,22 +179,22 @@ def build_split_job_payload(
 
         product_name = Path(calibrated_product).stem
         splits_dir_path = Path(splits_dir)
-        for target_name, spws in spw_map.items():
-            out_ms = splits_dir_path / f"{product_name}_{target_name}.ms"
+        out_ms = splits_dir_path / f"{product_name}_targets.ms"
 
-            # change the spws to string format for casa
-            spw_str = ",".join(map(str, spws))
+        # change the spws to string format for casa
+        spw_str = ",".join(map(str, spws))
 
-            tasks.append(
-                {
-                    "task": "split",
-                    "vis": str(calibrated_product),
-                    "outputvis": str(out_ms),
-                    "field": target_name,
-                    "spw": spw_str,
-                    "datacolumn": str(data_column),
-                }
-            )
+        # only split on OBSERVE_TARGET intents, and not per field
+        tasks.append(
+            {
+                "task": "split",
+                "vis": str(calibrated_product),
+                "outputvis": str(out_ms),
+                "intent": "*OBSERVE_TARGET*",
+                "spw": spw_str,
+                "datacolumn": str(data_column),
+            }
+        )
 
     # build full JSON payload
     payload = {

@@ -38,7 +38,7 @@ if __name__ == "__main__":
             split(
                 vis=task["vis"],
                 outputvis=task["outputvis"],
-                field=task["field"],
+                intent=task["intent"],
                 spw=task["spw"],
                 datacolumn=task.get("datacolumn", "data"),
             )
