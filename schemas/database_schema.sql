@@ -114,7 +114,7 @@ CREATE TABLE pipeline_state (
     download_status TEXT DEFAULT 'pending',             -- pending | in_progress | downloaded | complete | error
     pre_selfcal_split_status TEXT DEFAULT 'pending',    -- pending | in_progress | split | complete | error
     pre_selfcal_listobs_status TEXT DEFAULT 'pending',  -- pending | in_progress | listed | complete | error
-    selfcal_status TEXT DEFAULT 'pending',
+    selfcal_status TEXT DEFAULT 'pending',              -- pending | in_progress | prepped | selfcaled | complete | error
     imaging_status TEXT DEFAULT 'pending',
     cleanup_status TEXT DEFAULT 'pending',
 

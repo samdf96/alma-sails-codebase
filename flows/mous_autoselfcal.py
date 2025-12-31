@@ -90,21 +90,12 @@ def validate_mous_selfcal_status(
 
     preselfcal_listobs_status = row["pre_selfcal_listobs_status"]
 
-    if preselfcal_listobs_status != "complete":
+    if preselfcal_listobs_status != "prepped":
         raise ValueError(
-            f"MOUS {mous_id} has pre_selfcal_listobs_status '{preselfcal_listobs_status}', expected 'complete'"
+            f"MOUS {mous_id} has pre_selfcal_listobs_status '{preselfcal_listobs_status}', expected 'prepped'"
         )
 
-    log.info(f"[{mous_id}] MOUS pre_selfcal_listobs_status validated as 'complete'.")
-
-    selfcal_status = row["selfcal_status"]
-
-    if selfcal_status != "pending":
-        raise ValueError(
-            f"MOUS {mous_id} has selfcal_status '{selfcal_status}', expected 'pending'"
-        )
-
-    log.info(f"[{mous_id}] MOUS selfcal_status validated as 'pending'.")
+    log.info(f"[{mous_id}] MOUS pre_selfcal_listobs_status validated as 'prepped'.")
     return
 
 
@@ -228,24 +219,11 @@ def autoselfcal_mous_flow(
     # set auto_selfcal directory paths
     vm_autoselfcal_dir = vm_mous_dir / "auto_selfcal"
     platform_autoselfcal_dir = to_platform_path(vm_autoselfcal_dir)
-    # create the auto_selfcal directory if it doesn't exist
-    os.makedirs(vm_autoselfcal_dir, exist_ok=True)
-
-    # copy over the split datasets into the auto_selfcal directory
-    with get_db_connection(db_path) as conn:
-        split_products = get_pipeline_state_record_column_value(
-            conn, mous_id, "split_products_path"
+    # verify that the auto_selfcal directory exists
+    if not vm_autoselfcal_dir.exists():
+        raise FileNotFoundError(
+            f"[{mous_id}] auto_selfcal directory not found at {vm_autoselfcal_dir}"
         )
-    for split_product in split_products:
-        src_path = to_vm_path(split_product)
-        dest_path = vm_autoselfcal_dir / src_path.name
-        if not dest_path.exists():
-            shutil.copytree(src_path, dest_path)
-            log.info(
-                f"[{mous_id}] Copied {src_path} to {dest_path} for self-calibration."
-            )
-        else:
-            log.info(f"[{mous_id}] {dest_path} already exists, skipping copy.")
 
     # submit job to headless session
     try:

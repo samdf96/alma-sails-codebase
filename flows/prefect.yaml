@@ -110,6 +110,19 @@ deployments:
     work_queue_name: null
     job_variables: {}
 
+- name: mous-autoselfcal-prep
+  version: null
+  tags: []
+  description: null
+  schedule: {}
+  flow_name: null
+  entrypoint: mous_autoselfcal_prep.py:autoselfcal_prep_flow
+  parameters: {}
+  work_pool:
+    name: headless-runs
+    work_queue_name: null
+    job_variables: {}
+
 - name: mous-autoselfcal
   version: null
   tags: []
