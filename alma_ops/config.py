@@ -86,7 +86,7 @@ CASA_IMAGE_PIPE = "images.canfar.net/casa-6/casa:6.5.4-9-pipeline"
 WGET2_IMAGE = "images.canfar.net/skaha/astroml:25.09"
 
 # Auto Self-Calibration files
-AUTO_SELFCAL_DIR = PROJECT_ROOT / "auto_selfcal"
+AUTO_SELFCAL_ENTRY_SCRIPT = PROJECT_ROOT / "auto_selfcal" / "bin" / "auto_selfcal.py"
 
 # =====================================================================
 # CLI Entry
