@@ -199,6 +199,24 @@ def post_autoselfcal_organize_flow(
         log.info(f"[{mous_id}] Performing actual cleanup...")
         cleanup(Path(vm_autoselfcal_dir), dry_run=False)
 
+    # get all *_target.ms files in the auto_selfcal directory
+    target_ms_files = list(vm_autoselfcal_dir.glob("*_targets.ms"))
+
+    # update database to set selfcal_products_nonsub_path
+    with get_db_connection(db_path) as conn:
+        update_pipeline_state_record(
+            conn, mous_id, selfcal_products_nonsub_path=target_ms_files
+        )
+
+    # get all *_target.contsub.ms files in the auto_selfcal directory
+    target_contsub_ms_files = list(vm_autoselfcal_dir.glob("*_targets.contsub.ms"))
+
+    # update database to set selfcal_products_sub_path
+    with get_db_connection(db_path) as conn:
+        update_pipeline_state_record(
+            conn, mous_id, selfcal_products_sub_path=target_contsub_ms_files
+        )
+
     # update database to mark as 'complete'
     with get_db_connection(db_path) as conn:
         update_pipeline_state_record(conn, mous_id, selfcal_status="complete")
