@@ -93,7 +93,7 @@ deployments:
   entrypoint: mous_post_split_organize.py:post_split_organize_flow
   parameters: {}
   work_pool:
-    name: headless-runs
+    name: vm-runs
     work_queue_name: null
     job_variables: {}
 
@@ -133,5 +133,18 @@ deployments:
   parameters: {}
   work_pool:
     name: headless-runs
+    work_queue_name: null
+    job_variables: {}
+
+- name: post-autoselfcal-organize
+  version: null
+  tags: []
+  description: null
+  schedule: {}
+  flow_name: null
+  entrypoint: mous_post_autoselfcal_organize.py:post_autoselfcal_organize_flow
+  parameters: {}
+  work_pool:
+    name: vm-runs
     work_queue_name: null
     job_variables: {}

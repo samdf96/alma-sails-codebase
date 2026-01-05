@@ -26,12 +26,12 @@ setup_path()
 # ---------------------------------------------------------------------
 # imports
 # ---------------------------------------------------------------------
-import shutil
 from pathlib import Path
 from typing import Optional
 
+from prefect import flow, get_run_logger, task
+
 from alma_ops.config import (
-    DATASETS_DIR,
     DB_PATH,
     to_vm_path,
 )
@@ -41,14 +41,17 @@ from alma_ops.db import (
     get_pipeline_state_record_column_value,
     update_pipeline_state_record,
 )
-from prefect import flow, get_run_logger, task
+
+# =====================================================================
+# Prefect Tasks
+# =====================================================================
 
 
 @task(name="Validate MOUS Split Status")
 def validate_mous_split_status(
     mous_id: str,
     db_path: str,
-) -> str:
+):
     """Validates that the MOUS ID has a 'split' status in the database.
 
     Parameters
@@ -60,6 +63,8 @@ def validate_mous_split_status(
 
     Raises
     ------
+    ValueError
+        If the MOUS ID is not found.
     ValueError
         If the MOUS ID does not have a 'split' status.
     """
@@ -89,7 +94,6 @@ def validate_mous_split_status(
 def post_split_organize_flow(
     mous_id: str,
     db_path: Optional[str] = None,
-    datasets_dir: Optional[str] = None,
 ):
     """Prefect flow to organize MOUS data after splitting.
 
@@ -99,8 +103,6 @@ def post_split_organize_flow(
         The MOUS ID to organize.
     db_path : str, optional
         Path to the database, by default DB_PATH
-    datasets_dir : str, optional
-        Base directory for datasets, by default DATASETS_DIR
     weblog_dir : str, optional
         Base directory for weblogs, by default SRDP_WEBLOG_DIR
     """
@@ -110,8 +112,6 @@ def post_split_organize_flow(
     log.info(f"[{mous_id}] Parsing input parameters...")
     db_path = db_path or DB_PATH
     log.info(f"[{mous_id}] db_path set as: {db_path}")
-    datasets_dir = datasets_dir or DATASETS_DIR
-    log.info(f"[{mous_id}] datasets_dir set as: {datasets_dir}")
 
     # validate status is 'split'
     log.info(f"[{mous_id}] Validating mous pipeline_state status...")
