@@ -26,14 +26,9 @@ setup_path()
 # ---------------------------------------------------------------------
 # imports
 # ---------------------------------------------------------------------
-import os
-import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
-
-from canfar.sessions import Session
-from prefect import flow, get_run_logger, task
 
 from alma_ops.config import (
     AUTO_SELFCAL_ENTRY_SCRIPT,
@@ -51,6 +46,17 @@ from alma_ops.db import (
     update_pipeline_state_record,
 )
 from alma_ops.utils import to_dir_mous_id
+from canfar.sessions import Session
+from prefect import flow, get_run_logger, task
+
+# =====================================================================
+# Configuration for Headless Session
+# =====================================================================
+# the number of cores and memory to allocate to the headless session
+NCORES = 4
+MEM_GB = 32
+# whether to use the above fixed session configuration
+USE_FIXED_SESSION = True
 
 # =====================================================================
 # Prefect Tasks
@@ -76,9 +82,7 @@ def validate_mous_selfcal_status(
     ValueError
         The MOUS is not found in the database.
     ValueError
-        The MOUS pre_selfcal_listobs_status is not 'complete'.
-    ValueError
-        The MOUS selfcal_status is not 'pending'.
+        The MOUS selfcal_status is not 'prepped'.
     """
     log = get_run_logger()
 
@@ -88,14 +92,14 @@ def validate_mous_selfcal_status(
     if not row:
         raise ValueError(f"MOUS ID {mous_id} not found")
 
-    preselfcal_listobs_status = row["pre_selfcal_listobs_status"]
+    selfcal_status = row["selfcal_status"]
 
-    if preselfcal_listobs_status != "prepped":
+    if selfcal_status != "prepped":
         raise ValueError(
-            f"MOUS {mous_id} has pre_selfcal_listobs_status '{preselfcal_listobs_status}', expected 'prepped'"
+            f"MOUS {mous_id} has selfcal_status '{selfcal_status}', expected 'prepped'"
         )
 
-    log.info(f"[{mous_id}] MOUS pre_selfcal_listobs_status validated as 'prepped'.")
+    log.info(f"[{mous_id}] MOUS selfcal_status validated as 'prepped'.")
     return
 
 
@@ -120,19 +124,31 @@ def launch_autoselfcal_job_task(
     )
 
     # set path to autoselfcal script
-    run_headless_autoselfcal_path = (
-        Path(PROJECT_ROOT)
-        / "alma-sails-codebase"
-        / "alma_ops"
-        / "autoselfcal_helpers"
-        / "run_autoselfcal.sh"
-    )
+    if USE_FIXED_SESSION:
+        run_headless_autoselfcal_path = (
+            Path(PROJECT_ROOT)
+            / "alma-sails-codebase"
+            / "alma_ops"
+            / "autoselfcal"
+            / "run_autoselfcal_fixed.sh"
+        )
+    else:
+        run_headless_autoselfcal_path = (
+            Path(PROJECT_ROOT)
+            / "alma-sails-codebase"
+            / "alma_ops"
+            / "autoselfcal"
+            / "run_autoselfcal_flexible.sh"
+        )
     platform_run_headless_autoselfcal_path = to_platform_path(
         run_headless_autoselfcal_path
     )
     log.info(
         f"[{mous_id}] run_headless_autoselfcal script path set as: {platform_run_headless_autoselfcal_path}"
     )
+
+    # set autoselfcal entry script path to be platform path
+    vm_autoselfcal_entry_script = to_platform_path(str(AUTO_SELFCAL_ENTRY_SCRIPT))
 
     # call task to launch headless session job
     job_id = launch_autoselfcal_headless_session(
@@ -142,7 +158,7 @@ def launch_autoselfcal_job_task(
         img=CASA_IMAGE_PIPE,
         run_headless_autoselfcal_path=platform_run_headless_autoselfcal_path,
         terminal_logfile_path_prefix=str(terminal_logfile_path_prefix),
-        autoselfcal_entry_script=str(AUTO_SELFCAL_ENTRY_SCRIPT),
+        autoselfcal_entry_script=str(vm_autoselfcal_entry_script),
         autoselfcal_mous_dir=platform_autoselfcal_dir,
     )
 
@@ -168,12 +184,26 @@ def launch_autoselfcal_headless_session(
     session = Session()
 
     # submit job
-    job_id = session.create(
-        name=job_name,
-        image=img,
-        cmd=run_headless_autoselfcal_path,
-        args=f"{mous_id} {db_path} {terminal_logfile_path_prefix} {autoselfcal_entry_script} {autoselfcal_mous_dir}",
-    )
+    if USE_FIXED_SESSION:
+        log.info(
+            f"[{mous_id}] Launching headless session with fixed resources: {NCORES} cores, {MEM_GB} GB memory"
+        )
+        job_id = session.create(
+            name=job_name,
+            image=img,
+            cores=NCORES,
+            ram=MEM_GB,
+            cmd=run_headless_autoselfcal_path,
+            args=f"{mous_id} {db_path} {terminal_logfile_path_prefix} {autoselfcal_entry_script} {autoselfcal_mous_dir} {NCORES} {MEM_GB}",
+        )
+    else:
+        log.info(f"[{mous_id}] Launching headless session with flexible resources")
+        job_id = session.create(
+            name=job_name,
+            image=img,
+            cmd=run_headless_autoselfcal_path,
+            args=f"{mous_id} {db_path} {terminal_logfile_path_prefix} {autoselfcal_entry_script} {autoselfcal_mous_dir}",
+        )
 
     if not job_id:
         raise RuntimeError("Unsuccessful job launch.")
@@ -211,10 +241,11 @@ def autoselfcal_mous_flow(
         update_pipeline_state_record(conn, mous_id, selfcal_status="in_progress")
 
     # organizing and creating new directories and paths
-    vm_mous_dir = Path(
-        get_pipeline_state_record_column_value(db_path, mous_id, "mous_dir")
-    )
-    platform_mous_dir = to_platform_path(vm_mous_dir)
+    with get_db_connection(db_path) as conn:
+        platform_mous_dir = get_pipeline_state_record_column_value(
+            conn, mous_id, "mous_directory"
+        )
+    vm_mous_dir = to_vm_path(platform_mous_dir)
 
     # set auto_selfcal directory paths
     vm_autoselfcal_dir = vm_mous_dir / "auto_selfcal"
@@ -224,6 +255,13 @@ def autoselfcal_mous_flow(
         raise FileNotFoundError(
             f"[{mous_id}] auto_selfcal directory not found at {vm_autoselfcal_dir}"
         )
+
+    # # set timestamp for the selfcal portion of this run
+    # TODO: implement start time tracking with CURRENT_TIMESTAMP implementation
+    # with get_db_connection(db_path) as conn:
+    #     update_pipeline_state_record(
+    #         conn, mous_id, selfcal_started_at=datetime.now()
+    #     )
 
     # submit job to headless session
     try:

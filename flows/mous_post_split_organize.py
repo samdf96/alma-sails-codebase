@@ -30,8 +30,6 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-from prefect import flow, get_run_logger, task
-
 from alma_ops.config import (
     DATASETS_DIR,
     DB_PATH,
@@ -43,6 +41,7 @@ from alma_ops.db import (
     get_pipeline_state_record_column_value,
     update_pipeline_state_record,
 )
+from prefect import flow, get_run_logger, task
 
 
 @task(name="Validate MOUS Split Status")
@@ -139,7 +138,7 @@ def post_split_organize_flow(
         update_pipeline_state_record(conn, mous_id, pre_selfcal_split_status="complete")
 
     # remove calibrated_products
-    log.info(f"[{mous_id}] Removing calibrated_products from database...")
+    log.info(f"[{mous_id}] Removing calibrated_products from the mous directory...")
     with get_db_connection(db_path) as conn:
         calibrated_products = get_pipeline_state_record_column_value(
             conn, mous_id, "calibrated_products"
@@ -150,7 +149,7 @@ def post_split_organize_flow(
         for product_path in calibrated_products:
             vm_path = to_vm_path(product_path)
             if vm_path and Path(vm_path).exists():
-                # TODO: re-enable removal once testing is complete
+                # TODO: move removal of calibrated products to a separate flow - post listobs
                 # shutil.rmtree(vm_path, ignore_errors=True)
                 log.info(f"[{mous_id}] Removed calibrated product directory: {vm_path}")
             else:

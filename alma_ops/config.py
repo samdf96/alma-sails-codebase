@@ -83,7 +83,7 @@ def to_vm_path(path: str | list[str]) -> Path | list[Path]:
 # CASA Image to use for processing
 CASA_IMAGE = "images.canfar.net/casa-6/casa:6.6.4-34"
 CASA_IMAGE_PIPE = "images.canfar.net/casa-6/casa:6.5.4-9-pipeline"
-WGET2_IMAGE = "images.canfar.net/skaha/astroml:25.09"
+WGET2_IMAGE = "images.canfar.net/skaha/astroml:25.10"
 
 # Auto Self-Calibration files
 AUTO_SELFCAL_ENTRY_SCRIPT = PROJECT_ROOT / "auto_selfcal" / "bin" / "auto_selfcal.py"

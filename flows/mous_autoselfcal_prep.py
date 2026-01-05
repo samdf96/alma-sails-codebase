@@ -30,9 +30,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from canfar.sessions import Session
-from prefect import flow, get_run_logger, task
-
 from alma_ops.config import (
     DATASETS_DIR,
     DB_PATH,
@@ -47,6 +44,8 @@ from alma_ops.db import (
     get_pipeline_state_record_column_value,
     update_pipeline_state_record,
 )
+from canfar.sessions import Session
+from prefect import flow, get_run_logger, task
 
 # =====================================================================
 # Prefect Tasks
@@ -138,8 +137,8 @@ def launch_autoselfcal_prep_job_task(
         Path(PROJECT_ROOT)
         / "alma-sails-codebase"
         / "alma_ops"
-        / "autoselfcal_helpers"
-        / "run_autoselfcal_prep.py"
+        / "autoselfcal"
+        / "run_autoselfcal_prep.sh"
     )
     platform_run_headless_autoselfcal_path = to_platform_path(
         run_headless_autoselfcal_prep_path
@@ -148,10 +147,13 @@ def launch_autoselfcal_prep_job_task(
         f"[{mous_id}] Autoselfcal prep script path set as: {platform_run_headless_autoselfcal_path}"
     )
 
+    # use platform based path for db
+    platform_db_path = to_platform_path(Path(db_path))
+
     # call task to launch headless session job
     job_id = launch_autoselfcal_prep_headless_session(
         mous_id=mous_id,
-        db_path=db_path,
+        db_path=platform_db_path,
         job_name=job_name,
         img=WGET2_IMAGE,
         run_headless_autoselfcal_prep_path=platform_run_headless_autoselfcal_path,
@@ -159,7 +161,7 @@ def launch_autoselfcal_prep_job_task(
         split_products_paths=split_products_paths,
     )
 
-    log.info(f"[{mous_id}] Launched autoselfcal prep job with ID: {job_id}")
+    log.info(f"[{mous_id}] Launched autoselfcal prep job with ID: {job_id[0]}")
 
     return job_id[0]
 
@@ -181,7 +183,7 @@ def launch_autoselfcal_prep_headless_session(
     mous_id : str
         The MOUS ID to process.
     db_path : str
-        Path to the database.
+        Path to the database - platform path.
     job_name : str
         Name of the job.
     img : str
@@ -209,7 +211,9 @@ def launch_autoselfcal_prep_headless_session(
     session = Session()
 
     # construct argument based on fixed and variable inputs
-    args = " ".join([mous_id, db_path, autoselfcal_mous_dir] + split_products_paths)
+    args = " ".join(
+        [mous_id, str(db_path), autoselfcal_mous_dir] + split_products_paths
+    )
 
     # submit job
     job_id = session.create(
@@ -263,7 +267,6 @@ def autoselfcal_prep_flow(
             conn, mous_id, "mous_directory"
         )
 
-    platform_mous_dir = Path(platform_mous_dir)
     vm_mous_dir = to_vm_path(platform_mous_dir)
 
     # create autoselfcal working directory

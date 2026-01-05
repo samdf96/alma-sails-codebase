@@ -104,7 +104,7 @@ def main(base_path):
 
         if confirm("\nRun listobs() on all concatenated MSs? [y/N]: "):
             for ms in produced:
-                listobs(vis=str(ms), listfile=f"{ms}.listobs", overwrite=True)
+                listobs(vis=str(ms), listfile=f"{ms}.listobs.txt", overwrite=True)
                 print(f"  listobs written: {ms}.listobs")
 
     print("\nDone.")
