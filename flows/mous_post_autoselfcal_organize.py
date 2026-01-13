@@ -10,7 +10,7 @@ prefect deploy --all  # from the /flows directory
 
 Overview of Prefect Flow:
 ------------------------
-
+#TODO
 """
 # ruff: noqa: E402
 
@@ -28,10 +28,9 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
-from prefect import flow, get_run_logger, task
-
 from alma_ops.config import (
     DB_PATH,
+    to_platform_path,
     to_vm_path,
 )
 from alma_ops.db import (
@@ -40,6 +39,7 @@ from alma_ops.db import (
     get_pipeline_state_record_column_value,
     update_pipeline_state_record,
 )
+from prefect import flow, get_run_logger, task
 
 # declare list of files/directories to keep during cleanup for autoselfcal
 KEEP_PATTERNS = [
@@ -112,11 +112,17 @@ def cleanup(
     dry_run : bool
         If True, perform a dry run without deleting files.
     """
+    log = get_run_logger()
 
     # iterate over all patterns and build set of files to keep
     keep_files = set()
     for pattern in KEEP_PATTERNS:
-        keep_files.update(mous_dir.glob(pattern))
+        matches = mous_dir.glob(pattern)
+        for match in matches:
+            keep_files.add(match)
+
+            if match.is_dir():
+                keep_files.update(match.rglob("*"))
 
     # build the set of all items
     all_items = set(mous_dir.rglob("*"))
@@ -125,8 +131,9 @@ def cleanup(
     delete_items = all_items - keep_files
 
     if dry_run:
-        for item in delete_items:
-            print(f"[DRY RUN] Would delete: {item}")
+        log.info("DRY RUN: The following items would be deleted:")
+        for item in sorted(delete_items, reverse=True):
+            log.info(f"  {item}")
 
     else:
         for item in sorted(delete_items, reverse=True):
@@ -178,7 +185,7 @@ def post_autoselfcal_organize_flow(
 
     # set the auto_selfcal directory path
     platform_autoselfcal_dir = Path(mous_directory) / "auto_selfcal"
-    vm_autoselfcal_dir = to_vm_path(platform_autoselfcal_dir)
+    vm_autoselfcal_dir = to_vm_path(str(platform_autoselfcal_dir))
 
     # make sure the auto_selfcal directory exists before attempting to clean contents
     if not vm_autoselfcal_dir.exists():
@@ -201,6 +208,8 @@ def post_autoselfcal_organize_flow(
 
     # get all *_target.ms files in the auto_selfcal directory
     target_ms_files = list(vm_autoselfcal_dir.glob("*_targets.ms"))
+    # recast each enty as str for database storage
+    target_ms_files = [str(to_platform_path(f)) for f in target_ms_files]
 
     # update database to set selfcal_products_nonsub_path
     with get_db_connection(db_path) as conn:
@@ -210,6 +219,10 @@ def post_autoselfcal_organize_flow(
 
     # get all *_target.contsub.ms files in the auto_selfcal directory
     target_contsub_ms_files = list(vm_autoselfcal_dir.glob("*_targets.contsub.ms"))
+    # recast each enty as str for database storage
+    target_contsub_ms_files = [
+        str(to_platform_path(f)) for f in target_contsub_ms_files
+    ]
 
     # update database to set selfcal_products_sub_path
     with get_db_connection(db_path) as conn:

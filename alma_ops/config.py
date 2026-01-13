@@ -27,6 +27,8 @@ SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 # Path Conversion Utilities
 # =============================================================================
 
+# TODO Implement DualPath class for better conversion handling
+
 # What the VM sees vs what the platform sees
 VM_MOUNT_PREFIX = "/home/ubuntu/canfar_arc/projects/ALMA-SAILS"
 PLATFORM_PREFIX = "/arc/projects/ALMA-SAILS"

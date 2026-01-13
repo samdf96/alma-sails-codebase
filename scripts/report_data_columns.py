@@ -31,7 +31,7 @@ from casatools import table
 from alma_ops.config import DB_PATH
 from alma_ops.db import (
     get_db_connection,
-    get_pipeline_state_calibrated_products,
+    get_pipeline_state_record_column_value,
     get_pipeline_state_record,
 )
 from alma_ops.logging import get_logger
@@ -101,7 +101,7 @@ if __name__ == "__main__":
             exit(1)
 
         # grab the first value in the string contained in the calibrated products
-        calibrated_products = get_pipeline_state_calibrated_products(conn, args.mous_id)
+        calibrated_products = get_pipeline_state_record_column_value(conn, args.mous_id, "calibrated_products")
 
         if calibrated_products is None or len(calibrated_products) == 0:
             log.error(f"No calibrated products found for MOUS {args.mous_id}.")

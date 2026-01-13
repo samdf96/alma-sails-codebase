@@ -381,8 +381,8 @@ def get_mous_spw_mapping(conn: sqlite3.Connection, mous_id: str) -> list[int]:
         spw = int(m.group(1))
 
         # remap if needed
-        if spw_remap and str(spw) in spw_remap:
-            spw = spw_remap[str(spw)]
+        if spw_remap and spw in spw_remap:
+            spw = int(spw_remap[spw])
 
         spws.add(spw)
 
