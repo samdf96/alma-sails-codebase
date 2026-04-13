@@ -36,8 +36,7 @@ from alma_ops.config import (
     DATASETS_DIR,
     DB_PATH,
     PROJECT_ROOT,
-    to_platform_path,
-    to_vm_path,
+    DualPath,
 )
 from alma_ops.db import (
     get_db_connection,
@@ -124,31 +123,16 @@ def launch_autoselfcal_job_task(
     )
 
     # set path to autoselfcal script
-    if USE_FIXED_SESSION:
-        run_headless_autoselfcal_path = (
-            Path(PROJECT_ROOT)
-            / "alma-sails-codebase"
-            / "alma_ops"
-            / "autoselfcal"
-            / "run_autoselfcal_fixed.sh"
-        )
-    else:
-        run_headless_autoselfcal_path = (
-            Path(PROJECT_ROOT)
-            / "alma-sails-codebase"
-            / "alma_ops"
-            / "autoselfcal"
-            / "run_autoselfcal_flexible.sh"
-        )
-    platform_run_headless_autoselfcal_path = to_platform_path(
-        run_headless_autoselfcal_path
+    script_name = "run_autoselfcal_fixed.sh" if USE_FIXED_SESSION else "run_autoselfcal_flexible.sh"
+    run_headless_autoselfcal_path = DualPath(
+        Path(PROJECT_ROOT) / "alma-sails-codebase" / "alma_ops" / "autoselfcal" / script_name
     )
     log.info(
-        f"[{mous_id}] run_headless_autoselfcal script path set as: {platform_run_headless_autoselfcal_path}"
+        f"[{mous_id}] run_headless_autoselfcal script path set as: {run_headless_autoselfcal_path.platform}"
     )
 
-    # set autoselfcal entry script path to be platform path
-    vm_autoselfcal_entry_script = to_platform_path(str(AUTO_SELFCAL_ENTRY_SCRIPT))
+    # set autoselfcal entry script platform path
+    autoselfcal_entry_script = DualPath(AUTO_SELFCAL_ENTRY_SCRIPT)
 
     # call task to launch headless session job
     job_id = launch_autoselfcal_headless_session(
@@ -156,9 +140,9 @@ def launch_autoselfcal_job_task(
         db_path=platform_db_path,
         job_name=job_name,
         img=CASA_IMAGE_PIPE,
-        run_headless_autoselfcal_path=platform_run_headless_autoselfcal_path,
+        run_headless_autoselfcal_path=run_headless_autoselfcal_path.platform,
         terminal_logfile_path_prefix=str(terminal_logfile_path_prefix),
-        autoselfcal_entry_script=str(vm_autoselfcal_entry_script),
+        autoselfcal_entry_script=autoselfcal_entry_script.platform,
         autoselfcal_mous_dir=platform_autoselfcal_dir,
     )
 
@@ -245,15 +229,15 @@ def autoselfcal_mous_flow(
         platform_mous_dir = get_pipeline_state_record_column_value(
             conn, mous_id, "mous_directory"
         )
-    vm_mous_dir = to_vm_path(platform_mous_dir)
 
-    # set auto_selfcal directory paths
-    vm_autoselfcal_dir = vm_mous_dir / "auto_selfcal"
-    platform_autoselfcal_dir = to_platform_path(vm_autoselfcal_dir)
-    # verify that the auto_selfcal directory exists
-    if not vm_autoselfcal_dir.exists():
+    # mous_directory in DB is a platform path — wrap in DualPath for local ops
+    mous_dir = DualPath(platform_mous_dir)
+    autoselfcal_dir = mous_dir / "auto_selfcal"
+
+    # verify that the auto_selfcal directory exists (prep flow must have run first)
+    if not autoselfcal_dir.vm.exists():
         raise FileNotFoundError(
-            f"[{mous_id}] auto_selfcal directory not found at {vm_autoselfcal_dir}"
+            f"[{mous_id}] auto_selfcal directory not found at {autoselfcal_dir.vm}"
         )
 
     # # set timestamp for the selfcal portion of this run
@@ -267,9 +251,9 @@ def autoselfcal_mous_flow(
     try:
         launch_autoselfcal_job_task(
             mous_id=mous_id,
-            platform_db_path=to_platform_path(db_path),
-            platform_mous_dir=platform_mous_dir,
-            platform_autoselfcal_dir=platform_autoselfcal_dir,
+            platform_db_path=DualPath(db_path).platform,
+            platform_mous_dir=mous_dir.platform,
+            platform_autoselfcal_dir=autoselfcal_dir.platform,
         )
     except Exception as e:
         log.info(f"[{mous_id}] Updating database status to error")

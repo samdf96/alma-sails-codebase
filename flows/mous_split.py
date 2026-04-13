@@ -41,7 +41,7 @@ from alma_ops.config import (
     DATASETS_DIR,
     DB_PATH,
     PROJECT_ROOT,
-    to_platform_path,
+    DualPath,
 )
 from alma_ops.db import (
     get_db_connection,
@@ -278,24 +278,16 @@ def launch_split_job_task(
     )
 
     # set path to split script - relative to PROJECT_ROOT
-    run_headless_split_path = (
-        Path(PROJECT_ROOT)
-        / "alma-sails-codebase"
-        / "alma_ops"
-        / "splits"
-        / "run_split.sh"
+    run_headless_split_path = DualPath(
+        Path(PROJECT_ROOT) / "alma-sails-codebase" / "alma_ops" / "splits" / "run_split.sh"
     )
-    platform_run_headless_split_path = to_platform_path(run_headless_split_path)
-    log.info(
-        f"[{mous_id}] Run headless split script path set as: {platform_run_headless_split_path}"
-    )
+    log.info(f"[{mous_id}] Run headless split script path set as: {run_headless_split_path.platform}")
 
     # set casa driver script path
-    casa_driver_path = (
+    casa_driver_path = DualPath(
         Path(PROJECT_ROOT) / "alma-sails-codebase" / "alma_ops" / "casa_driver.py"
     )
-    platform_casa_driver_path = to_platform_path(casa_driver_path)
-    log.info(f"[{mous_id}] CASA driver path set as: {platform_casa_driver_path}")
+    log.info(f"[{mous_id}] CASA driver path set as: {casa_driver_path.platform}")
 
     # call task to launch headless session
     job_id = launch_split_headless_session(
@@ -303,10 +295,10 @@ def launch_split_job_task(
         db_path=db_path,
         job_name=job_name,
         img=CASA_IMAGE_PIPE,
-        run_headless_split_path=platform_run_headless_split_path,
+        run_headless_split_path=run_headless_split_path.platform,
         terminal_logfile_path_prefix=str(terminal_logfile_path_prefix),
         casa_logfile_path=casa_logfile_path,
-        casa_driver_script_path=platform_casa_driver_path,
+        casa_driver_script_path=casa_driver_path.platform,
         json_payload_path=json_payload_path,
     )
 
@@ -440,31 +432,31 @@ def split_mous_flow(
     log.info(f"[{mous_id}] Calibrated products: {calibrated_products}")
 
     # prepare output directory for splits
-    vm_mous_dir = Path(download_dir) / to_dir_mous_id(mous_id)
-    log.info(f"[{mous_id}] Preparing output directory at {vm_mous_dir}...")
+    mous_dir = DualPath(Path(download_dir) / to_dir_mous_id(mous_id))
+    log.info(f"[{mous_id}] Preparing output directory at {mous_dir.vm}...")
 
-    vm_splits_dir = vm_mous_dir / "splits"
-    vm_splits_dir.mkdir(parents=True, exist_ok=True)
-    log.info(f"[{mous_id}] Output directory ready at: {vm_splits_dir}")
+    splits_dir = mous_dir / "splits"
+    splits_dir.vm.mkdir(parents=True, exist_ok=True)
+    log.info(f"[{mous_id}] Output directory ready at: {splits_dir.vm}")
 
     # build the job payload json file and save it to mous_directory
     log.info(f"[{mous_id}] Building split-job schema...")
 
-    # pass in platform-specific paths
+    # calibrated_products from DB are already platform paths; pass directly
     payload, outputvis_path_list = build_split_job_payload(
         mous_id=mous_id,
         vm_db_path=db_path,  # vm path for reading spw mapping
-        platform_db_path=to_platform_path(db_path),
-        calibrated_products=to_platform_path(calibrated_products),
-        mous_dir=to_platform_path(vm_mous_dir),
-        splits_dir=to_platform_path(vm_splits_dir),
+        platform_db_path=DualPath(db_path).platform,
+        calibrated_products=calibrated_products,
+        mous_dir=mous_dir.platform,
+        splits_dir=splits_dir.platform,
     )
 
-    # write out the json file
-    json_path = vm_mous_dir / f"{to_dir_mous_id(mous_id)}_splits.json"
+    # write out the json file (VM path for local write)
+    json_path = mous_dir / f"{to_dir_mous_id(mous_id)}_splits.json"
     json_write_payload(
         payload=payload,
-        output_path=json_path,
+        output_path=json_path.vm,
     )
 
     # update database with split output paths
@@ -480,10 +472,10 @@ def split_mous_flow(
     try:
         launch_split_job_task(
             mous_id=mous_id,
-            db_path=to_platform_path(db_path),
-            mous_dir=to_platform_path(vm_mous_dir),
+            db_path=DualPath(db_path).platform,
+            mous_dir=mous_dir.platform,
             img=CASA_IMAGE_PIPE,
-            json_payload_path=to_platform_path(json_path),
+            json_payload_path=json_path.platform,
         )
 
     except Exception as e:

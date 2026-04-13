@@ -37,8 +37,7 @@ from alma_ops.config import (
     DATASETS_DIR,
     DB_PATH,
     SRDP_WEBLOG_DIR,
-    to_platform_path,
-    to_vm_path,
+    DualPath,
 )
 from alma_ops.db import (
     get_db_connection,
@@ -214,15 +213,15 @@ def post_download_organize_flow(
     log.info(f"[{mous_id}] Validating mous pipeline_state status...")
     tmpdir = validate_mous_download_status(mous_id, db_path)
 
-    # change tmpdir to be vm-style so the organize files can work
-    tmpdir = to_vm_path(tmpdir)
+    # tmpdir from DB is a platform path — wrap in DualPath so we can walk it locally
+    tmpdir = DualPath(tmpdir).vm
 
     # create the appropriate mous_dir
-    mous_dir = Path(datasets_dir) / to_dir_mous_id(mous_id)
-    mous_dir.mkdir(parents=True, exist_ok=True)
-    log.info(f"[{mous_id}] Created MOUS directory at: {mous_dir}")
+    mous_dir = DualPath(Path(datasets_dir) / to_dir_mous_id(mous_id))
+    mous_dir.vm.mkdir(parents=True, exist_ok=True)
+    log.info(f"[{mous_id}] Created MOUS directory at: {mous_dir.vm}")
 
-    # create the appropriate weblog_dir
+    # create the appropriate weblog_dir (VM path only — not stored in DB)
     weblog_mous_dir = Path(weblog_dir) / to_dir_mous_id(mous_id)
     weblog_mous_dir.mkdir(parents=True, exist_ok=True)
     log.info(f"[{mous_id}] Created weblog_restore directory at: {weblog_mous_dir}")
@@ -230,24 +229,21 @@ def post_download_organize_flow(
     # organizing downloaded files
     log.info(f"[{mous_id}] Organizing downloaded files...")
     calibrated_products = organize_downloaded_files(
-        mous_id, str(mous_dir), str(tmpdir), str(weblog_mous_dir)
+        mous_id, str(mous_dir.vm), str(tmpdir), str(weblog_mous_dir)
     )
 
     # updating database with mous_directory, calibrated_products, and complete state
+    # store platform paths in the database so headless sessions can use them directly
     with get_db_connection(db_path) as conn:
-        # convert mous_directory to platform path for database storage
-        platform_mous_directory = to_platform_path(mous_dir)
         update_pipeline_state_record(
             conn,
             mous_id,
-            mous_directory=platform_mous_directory,
+            mous_directory=mous_dir.platform,
         )
-        # convert calibrated_products to platform paths for database storage
-        platform_calibrated_products = to_platform_path(calibrated_products)
         update_pipeline_state_record(
             conn,
             mous_id,
-            calibrated_products=platform_calibrated_products,
+            calibrated_products=[DualPath(p).platform for p in calibrated_products],
         )
 
         # finally setting download_status to complete

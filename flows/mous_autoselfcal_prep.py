@@ -36,8 +36,7 @@ from alma_ops.config import (
     DB_PATH,
     PROJECT_ROOT,
     WGET2_IMAGE,
-    to_platform_path,
-    to_vm_path,
+    DualPath,
 )
 from alma_ops.db import (
     get_db_connection,
@@ -134,30 +133,24 @@ def launch_autoselfcal_prep_job_task(
     # creating job name
     job_name = f"wget2-{datetime.now().strftime('%Y%m%d-%H%M')}-autoselfcal-prep"
 
-    run_headless_autoselfcal_prep_path = (
+    run_headless_autoselfcal_prep_path = DualPath(
         Path(PROJECT_ROOT)
         / "alma-sails-codebase"
         / "alma_ops"
         / "autoselfcal"
         / "run_autoselfcal_prep.sh"
     )
-    platform_run_headless_autoselfcal_path = to_platform_path(
-        run_headless_autoselfcal_prep_path
-    )
     log.info(
-        f"[{mous_id}] Autoselfcal prep script path set as: {platform_run_headless_autoselfcal_path}"
+        f"[{mous_id}] Autoselfcal prep script path set as: {run_headless_autoselfcal_prep_path.platform}"
     )
-
-    # use platform based path for db
-    platform_db_path = to_platform_path(Path(db_path))
 
     # call task to launch headless session job
     job_id = launch_autoselfcal_prep_headless_session(
         mous_id=mous_id,
-        db_path=platform_db_path,
+        db_path=DualPath(db_path).platform,
         job_name=job_name,
         img=WGET2_IMAGE,
-        run_headless_autoselfcal_prep_path=platform_run_headless_autoselfcal_path,
+        run_headless_autoselfcal_prep_path=run_headless_autoselfcal_prep_path.platform,
         autoselfcal_mous_dir=autoselfcal_mous_dir,
         split_products_paths=split_products_paths,
     )
@@ -268,12 +261,12 @@ def autoselfcal_prep_flow(
             conn, mous_id, "mous_directory"
         )
 
-    vm_mous_dir = to_vm_path(platform_mous_dir)
+    # mous_directory in DB is a platform path — wrap in DualPath for local ops
+    mous_dir = DualPath(platform_mous_dir)
 
     # create autoselfcal working directory
-    vm_autoselfcal_dir = vm_mous_dir / "auto_selfcal"
-    vm_autoselfcal_dir.mkdir(parents=True, exist_ok=True)
-    platform_autoselfcal_dir = to_platform_path(vm_autoselfcal_dir)
+    autoselfcal_dir = mous_dir / "auto_selfcal"
+    autoselfcal_dir.vm.mkdir(parents=True, exist_ok=True)
 
     # gather split products paths
     with get_db_connection(db_path) as conn:
@@ -286,7 +279,7 @@ def autoselfcal_prep_flow(
         launch_autoselfcal_prep_job_task(
             mous_id=mous_id,
             db_path=db_path,
-            autoselfcal_mous_dir=platform_autoselfcal_dir,
+            autoselfcal_mous_dir=autoselfcal_dir.platform,
             split_products_paths=split_products,
         )
 

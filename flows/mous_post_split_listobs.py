@@ -36,7 +36,7 @@ from alma_ops.config import (
     DATASETS_DIR,
     DB_PATH,
     PROJECT_ROOT,
-    to_platform_path,
+    DualPath,
 )
 from alma_ops.db import (
     get_db_connection,
@@ -213,22 +213,16 @@ def launch_listobs_job_task(
     )
 
     # set run headless listobs script path - relative to PROJECT_ROOT
-    run_headless_listobs_path = (
-        Path(PROJECT_ROOT)
-        / "alma-sails-codebase"
-        / "alma_ops"
-        / "listobs"
-        / "run_listobs.sh"
+    run_headless_listobs_path = DualPath(
+        Path(PROJECT_ROOT) / "alma-sails-codebase" / "alma_ops" / "listobs" / "run_listobs.sh"
     )
-    platform_run_headless_listobs_path = to_platform_path(run_headless_listobs_path)
-    log.info(f"[{mous_id}] run_listobs.sh path: {platform_run_headless_listobs_path}")
+    log.info(f"[{mous_id}] run_listobs.sh path: {run_headless_listobs_path.platform}")
 
     # set casa driver script path
-    casa_driver_path = (
+    casa_driver_path = DualPath(
         Path(PROJECT_ROOT) / "alma-sails-codebase" / "alma_ops" / "casa_driver.py"
     )
-    platform_casa_driver_path = to_platform_path(casa_driver_path)
-    log.info(f"[{mous_id}] CASA driver path set as: {platform_casa_driver_path}")
+    log.info(f"[{mous_id}] CASA driver path set as: {casa_driver_path.platform}")
 
     # call task to launch headless session
     job_id = launch_headless_listobs_session(
@@ -236,10 +230,10 @@ def launch_listobs_job_task(
         db_path=platform_db_path,
         job_name=job_name,
         img=img,
-        run_headless_listobs_script_path=platform_run_headless_listobs_path,
+        run_headless_listobs_script_path=run_headless_listobs_path.platform,
         terminal_logfile_path_prefix=str(terminal_logfile_path_prefix),
         casa_logfile_path=casa_logfile_path,
-        casa_driver_script_path=platform_casa_driver_path,
+        casa_driver_script_path=casa_driver_path.platform,
         json_payload_path=json_payload_path,
     )
 
@@ -372,33 +366,31 @@ def post_split_listobs_flow(
     # build the job payload json file and save it to mous_directory
     log.info(f"[{mous_id}] Building listobs-job schema...")
 
-    # pass in platform-specific paths
+    # calibrated and split product paths from DB are already platform paths
     payload = build_listobs_job_payload(
         mous_id=mous_id,
-        platform_db_path=to_platform_path(db_path),
-        platform_datasets_dir=to_platform_path(datasets_dir),
-        platform_calibrated_products_path=[
-            to_platform_path(p) for p in calibrated_products_path
-        ],
-        platform_split_products_path=[to_platform_path(p) for p in split_products_path],
+        platform_db_path=DualPath(db_path).platform,
+        platform_datasets_dir=DualPath(datasets_dir).platform,
+        platform_calibrated_products_path=calibrated_products_path,
+        platform_split_products_path=split_products_path,
     )
 
-    # write JSON payload to file
-    vm_mous_dir = Path(datasets_dir) / to_dir_mous_id(mous_id)
-    json_path = vm_mous_dir / f"{to_dir_mous_id(mous_id)}_listobs.json"
+    # write JSON payload to file (VM path for local write)
+    mous_dir = DualPath(Path(datasets_dir) / to_dir_mous_id(mous_id))
+    json_path = mous_dir / f"{to_dir_mous_id(mous_id)}_listobs.json"
     json_write_payload(
         payload=payload,
-        output_path=json_path,
+        output_path=json_path.vm,
     )
 
     # submit job to headless session
     try:
         launch_listobs_job_task(
             mous_id=mous_id,
-            platform_db_path=to_platform_path(db_path),
-            platform_mous_dir=to_platform_path(vm_mous_dir),
+            platform_db_path=DualPath(db_path).platform,
+            platform_mous_dir=mous_dir.platform,
             img=CASA_IMAGE_PIPE,
-            json_payload_path=str(to_platform_path(json_path)),
+            json_payload_path=json_path.platform,
         )
 
     except Exception as e:

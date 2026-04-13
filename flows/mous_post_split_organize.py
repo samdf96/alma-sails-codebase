@@ -33,7 +33,7 @@ from prefect import flow, get_run_logger, task
 
 from alma_ops.config import (
     DB_PATH,
-    to_vm_path,
+    DualPath,
 )
 from alma_ops.db import (
     get_db_connection,
@@ -127,7 +127,7 @@ def post_split_organize_flow(
     if not split_products:
         raise ValueError(f"MOUS ID {mous_id} has no split products recorded.")
     for product_path in split_products:
-        vm_path = to_vm_path(product_path)
+        vm_path = DualPath(product_path).vm
         if not vm_path or not Path(vm_path).exists():
             raise ValueError(f"Split product does not exist: {vm_path}")
         log.info(f"[{mous_id}] Verified split product exists: {vm_path}")
@@ -147,7 +147,7 @@ def post_split_organize_flow(
     # go through each calibrated product and remove its directory
     if calibrated_products:
         for product_path in calibrated_products:
-            vm_path = to_vm_path(product_path)
+            vm_path = DualPath(product_path).vm
             if vm_path and Path(vm_path).exists():
                 # TODO: move removal of calibrated products to a separate flow - post listobs
                 # shutil.rmtree(vm_path, ignore_errors=True)
