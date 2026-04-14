@@ -222,7 +222,12 @@ def autoselfcal_mous_flow(
     # setting the database selfcal status to 'in_progress'
     log.info(f"[{mous_id}] Setting MOUS selfcal_status to 'in_progress'")
     with get_db_connection(db_path) as conn:
-        update_pipeline_state_record(conn, mous_id, selfcal_status="in_progress")
+        update_pipeline_state_record(
+            conn,
+            mous_id,
+            selfcal_status="in_progress",
+            selfcal_started_at=datetime.now().isoformat(),
+        )
 
     # organizing and creating new directories and paths
     with get_db_connection(db_path) as conn:
@@ -239,13 +244,6 @@ def autoselfcal_mous_flow(
         raise FileNotFoundError(
             f"[{mous_id}] auto_selfcal directory not found at {autoselfcal_dir.vm}"
         )
-
-    # # set timestamp for the selfcal portion of this run
-    # TODO: implement start time tracking with CURRENT_TIMESTAMP implementation
-    # with get_db_connection(db_path) as conn:
-    #     update_pipeline_state_record(
-    #         conn, mous_id, selfcal_started_at=datetime.now()
-    #     )
 
     # submit job to headless session
     try:

@@ -28,6 +28,7 @@ setup_path()
 # ---------------------------------------------------------------------
 import os
 import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -251,6 +252,7 @@ def post_download_organize_flow(
             conn,
             mous_id,
             download_status="complete",
+            download_completed_at=datetime.now().isoformat(),
         )
     log.info(
         f"[{mous_id}] Updated database records with organized file paths and status."

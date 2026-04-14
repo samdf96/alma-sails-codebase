@@ -25,13 +25,12 @@ setup_path()
 # imports
 # ---------------------------------------------------------------------
 import shutil
-from pathlib import Path
+from datetime import datetime
 from typing import Optional
 
 from alma_ops.config import (
     DB_PATH,
-    to_platform_path,
-    to_vm_path,
+    DualPath,
 )
 from alma_ops.db import (
     get_db_connection,
@@ -184,32 +183,31 @@ def post_autoselfcal_organize_flow(
         )
 
     # set the auto_selfcal directory path
-    platform_autoselfcal_dir = Path(mous_directory) / "auto_selfcal"
-    vm_autoselfcal_dir = to_vm_path(str(platform_autoselfcal_dir))
+    autoselfcal_dir = DualPath(mous_directory) / "auto_selfcal"
 
     # make sure the auto_selfcal directory exists before attempting to clean contents
-    if not vm_autoselfcal_dir.exists():
+    if not autoselfcal_dir.vm.exists():
         log.warning(
-            f"[{mous_id}] auto_selfcal directory does not exist at {vm_autoselfcal_dir}. Skipping cleanup."
+            f"[{mous_id}] auto_selfcal directory does not exist at {autoselfcal_dir.vm}. Skipping cleanup."
         )
         return
 
     # clean up the auto_selfcal directory
     log.info(
-        f"[{mous_id}] Cleaning up auto_selfcal directory at {vm_autoselfcal_dir}..."
+        f"[{mous_id}] Cleaning up auto_selfcal directory at {autoselfcal_dir.vm}..."
     )
 
     if dry_run:
         log.info(f"[{mous_id}] Performing dry run cleanup...")
-        cleanup(Path(vm_autoselfcal_dir), dry_run=True)
+        cleanup(autoselfcal_dir.vm, dry_run=True)
     else:
         log.info(f"[{mous_id}] Performing actual cleanup...")
-        cleanup(Path(vm_autoselfcal_dir), dry_run=False)
+        cleanup(autoselfcal_dir.vm, dry_run=False)
 
     # get all *_target.ms files in the auto_selfcal directory
-    target_ms_files = list(vm_autoselfcal_dir.glob("*_targets.ms"))
-    # recast each enty as str for database storage
-    target_ms_files = [str(to_platform_path(f)) for f in target_ms_files]
+    target_ms_files = list(autoselfcal_dir.vm.glob("*_targets.ms"))
+    # store as platform paths for database
+    target_ms_files = [DualPath(f).platform for f in target_ms_files]
 
     # update database to set selfcal_products_nonsub_path
     with get_db_connection(db_path) as conn:
@@ -218,11 +216,9 @@ def post_autoselfcal_organize_flow(
         )
 
     # get all *_target.contsub.ms files in the auto_selfcal directory
-    target_contsub_ms_files = list(vm_autoselfcal_dir.glob("*_targets.contsub.ms"))
-    # recast each enty as str for database storage
-    target_contsub_ms_files = [
-        str(to_platform_path(f)) for f in target_contsub_ms_files
-    ]
+    target_contsub_ms_files = list(autoselfcal_dir.vm.glob("*_targets.contsub.ms"))
+    # store as platform paths for database
+    target_contsub_ms_files = [DualPath(f).platform for f in target_contsub_ms_files]
 
     # update database to set selfcal_products_sub_path
     with get_db_connection(db_path) as conn:
@@ -232,4 +228,9 @@ def post_autoselfcal_organize_flow(
 
     # update database to mark as 'complete'
     with get_db_connection(db_path) as conn:
-        update_pipeline_state_record(conn, mous_id, selfcal_status="complete")
+        update_pipeline_state_record(
+            conn,
+            mous_id,
+            selfcal_status="complete",
+            selfcal_completed_at=datetime.now().isoformat(),
+        )

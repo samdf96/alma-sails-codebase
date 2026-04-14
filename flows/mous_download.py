@@ -42,7 +42,7 @@ from alma_ops.config import (
     PROJECT_ROOT,
     SRDP_WEBLOG_DIR,
     WGET2_IMAGE,
-    to_platform_path,
+    DualPath,
 )
 from alma_ops.db import (
     get_db_connection,
@@ -150,23 +150,21 @@ def launch_download_job_task(
     # for headless sessions: use platform-native paths
     log.info(f"[{mous_id}] Setting platform-native paths for headless session launch")
 
-    platform_tmpdir = to_platform_path(tmpdir)
+    platform_tmpdir = DualPath(tmpdir).platform
     log.info(f"[{mous_id}] Platform tmpdir location set as: {platform_tmpdir}")
 
     # setting path to download script - relative to PROJECT_ROOT
-    run_download_script_filepath = to_platform_path(
-        str(
-            PROJECT_ROOT
-            / "alma-sails-codebase"
-            / "alma_ops"
-            / "downloads"
-            / "run_download.sh"
-        )
-    )
+    run_download_script_filepath = (
+        DualPath(PROJECT_ROOT)
+        / "alma-sails-codebase"
+        / "alma_ops"
+        / "downloads"
+        / "run_download.sh"
+    ).platform
     log.info(
         f"[{mous_id}] Platform download script location set as: {run_download_script_filepath}"
     )
-    platform_db_path = to_platform_path(db_path)
+    platform_db_path = DualPath(db_path).platform
     log.info(f"[{mous_id}] Platform db_path location set as: {platform_db_path}")
 
     # updating database to contain the tmpdir in the mous_directory spot
@@ -360,7 +358,12 @@ def download_mous_flow(
     # updating database to in_progress
     log.info(f"[{mous_id}] Updating database status to in_progress")
     with get_db_connection(db_path) as conn:
-        update_pipeline_state_record(conn, mous_id, download_status="in_progress")
+        update_pipeline_state_record(
+            conn,
+            mous_id,
+            download_status="in_progress",
+            download_started_at=datetime.now().isoformat(),
+        )
 
     # submit job to headless session
     try:
