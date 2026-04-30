@@ -21,8 +21,27 @@ Actual headless session launches are blocked by patching
 
 import json
 import sqlite3
+from unittest.mock import MagicMock
 
+import prefect
 import pytest
+
+# ---------------------------------------------------------------------------
+# Strip Prefect's orchestration layer before any flow module is imported.
+#
+# Must be module-level code (not inside a fixture) so it executes before
+# pytest imports the test files, which in turn import the flow modules.
+# Flow modules do `from prefect import flow, task, get_run_logger` at import
+# time — patching the prefect module here first means those imports receive
+# our no-ops, making flows and tasks plain Python functions.
+#
+# Result: no Prefect API server is needed, retries are stripped, and all
+# flow/task logic runs synchronously in-process without logging to any server.
+# ---------------------------------------------------------------------------
+_mock_logger = MagicMock()
+prefect.flow = lambda **kw: (lambda f: f)
+prefect.task = lambda **kw: (lambda f: f)
+prefect.get_run_logger = lambda: _mock_logger
 
 from alma_ops.utils import to_dir_mous_id
 

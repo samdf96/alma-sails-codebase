@@ -32,7 +32,6 @@ setup_path()
 # ---------------------------------------------------------------------
 import os
 import tempfile
-import time
 from datetime import datetime
 from typing import Optional
 
@@ -187,77 +186,6 @@ def launch_download_job_task(
     return job_id[0], tmpdir
 
 
-@task(name="Monitor Download Headless Session")
-def monitor_download_headless_session(job_id: str, mous_id: str):
-    """Monitor the headless session for its end state."""
-    log = get_run_logger()
-
-    # initialize the session
-    session = Session()
-
-    # initiate response tracking
-    log.info(f"[{mous_id}] Setting response tracking values...")
-    consecutive_empty_responses = 0
-    max_empty_responses = 3  # allows some transient failures
-
-    # start with waiting - helps the session get into the API calls
-    log.info(f"[{mous_id}] Pre-wait period before first session.info() call.")
-    time.sleep(10)
-
-    while True:
-        try:
-            # query job status
-            log.info(f"[{mous_id}] Conducting API call through session.info().")
-            session_info = session.info(ids=job_id)
-
-            if not session_info:
-                # tally the empty response
-                consecutive_empty_responses += 1
-                log.warning(f"[{mous_id}] Empty response from session.info()")
-                log.warning(f"{consecutive_empty_responses}/{max_empty_responses}")
-
-                # if too many consecutive failures, something is wrong
-                if consecutive_empty_responses >= max_empty_responses:
-                    raise RuntimeError(
-                        f"Job {job_id} returned empty info {max_empty_responses} times - may have expired or been deleted"
-                    )
-
-                # wait and retry for next check
-                time.sleep(60)
-                continue
-
-            # reset counter on successful response
-            consecutive_empty_responses = 0
-
-            # now we check the status
-            status = session_info[0]["status"]
-            log.debug(f"[{mous_id}] Job status: {status}")
-
-            if status in ["Succeeded", "Failed", "Terminated"]:
-                log.info(f"Job completed with status: {status}")
-
-                if status == "Succeeded":
-                    return True
-                else:
-                    raise RuntimeError(f"Job failed with status: {status}")
-
-        except Exception as e:
-            log.error(f"[{mous_id}] Error checking job status: {e}")
-
-            # don't retry on known errors
-            if isinstance(e, (RuntimeError)):
-                raise
-
-            # for other errors, wait and retry
-            consecutive_empty_responses += 1
-            if consecutive_empty_responses >= max_empty_responses:
-                raise
-
-        # wait before next check
-        log.debug(f"[{mous_id}] Waiting 60s before next check...")
-        time.sleep(60)
-
-
 @task(name="Validate Download and URL Values")
 def validate_mous_download_status(mous_id: str, db_path: str) -> tuple[str, str]:
     """Ensures the download status is 'pending' and a valid URL exists.
@@ -370,31 +298,6 @@ def download_mous_flow(
         # calling task to launch job
         log.info(f"[{mous_id}] Calling task to launch download job...")
         job_id, tmpdir = launch_download_job_task(mous_id, url, download_dir, db_path)
-
-        # # monitor the headless session
-        # log.info(f'[{mous_id}] Monitoring headless job...')
-        # status_flag = monitor_download_job(job_id, mous_id)
-
-        # # if status is completed, then organize the files
-        # if status_flag:
-        #     log.info(f'[{mous_id}] Download status marked as completed...')
-        #     log.info(f'[{mous_id}] Organizing downloaded files...')
-        #     calibrated_products, _, _ = organize_downloaded_files(mous_id, tmpdir, download_dir, weblog_dir)
-
-        #     # updating database with mous_directory and calibrated products
-        #     with get_db_connection(db_path) as conn:
-        #         # grab the mous_directory
-        #         mous_directory_path = to_dir_mous_id(mous_id)
-        #         set_mous_directory(conn, mous_id, mous_directory_path)
-        #         set_calibrated_products(conn, mous_id, calibrated_products)
-
-        #     log.info(f'[{mous_id}] Updating database status to completed')
-        #     with get_db_connection(db_path) as conn:
-        #         set_download_status_complete(conn, mous_id, timestamp=True)
-
-        #     # removing temporary directory after files have been moved
-        #     log.info(f'[{mous_id}] Removing temporary directory...')
-        # shutil.rmtree(tmpdir)
 
     except Exception as e:
         log.info(f"[{mous_id}] Updating database status to error")

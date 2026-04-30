@@ -22,6 +22,7 @@ DATASETS_DIR = PROJECT_ROOT / "datasets"
 SRDP_WEBLOG_DIR = PROJECT_ROOT / "SRDP_weblogs"
 CONFIG_DIR = PROJECT_ROOT / "config"
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
+IMAGING_ROOT_DIR = PROJECT_ROOT / "reduction" / "imaging"
 
 # =============================================================================
 # Path Conversion Utilities

@@ -9,6 +9,7 @@ import sqlite3
 
 import pytest
 
+
 # A stable, fake MOUS ID used across all tests that need one.
 TEST_MOUS_ID = "uid://A001/X1234/Xtest"
 

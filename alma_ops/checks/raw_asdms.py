@@ -1,15 +1,10 @@
 # alma_ops/checks/raw_asdms.py
 
 from pathlib import Path
-from datetime import datetime
+
 from alma_ops.logging import get_logger
 from alma_ops.utils import to_dir_mous_id
-from alma_ops.db import db_fetch_all, get_mous_expected_asdms
-from alma_ops.downloads.status import (
-    mark_download_success,
-    mark_download_partial,
-    mark_download_failure,
-)
+from alma_ops.db import get_mous_asdms_from_targets, update_pipeline_state_record
 
 log = get_logger(__name__)
 
@@ -41,7 +36,7 @@ def check_for_raw_asdms(conn, dataset_dir: str, verbose: bool = False, dry_run: 
         # Raw ASDM directories (*.ms)
         raw_asdms = sorted(str(p) for p in mous_dir.glob("*.ms"))
         found = len(raw_asdms)
-        expected = get_mous_expected_asdms(conn, mous_id)
+        expected = len(get_mous_asdms_from_targets(conn, mous_id))
 
         if found == 0:
             results.append({
@@ -57,12 +52,7 @@ def check_for_raw_asdms(conn, dataset_dir: str, verbose: bool = False, dry_run: 
                 log.info(f"✅ [{mous_id}] {note}")
 
             if not dry_run:
-                mark_download_success(
-                    conn,
-                    mous_id,
-                    download_path=str(mous_dir),
-                    asdm_paths=raw_asdms,
-                )
+                update_pipeline_state_record(conn, mous_id, download_status="complete")
 
             results.append({
                 "mous_id": mous_id,
@@ -76,13 +66,7 @@ def check_for_raw_asdms(conn, dataset_dir: str, verbose: bool = False, dry_run: 
                 log.warning(f"⚠️ [{mous_id}] {note}")
 
             if not dry_run:
-                mark_download_partial(
-                    conn,
-                    mous_id,
-                    download_path=str(mous_dir),
-                    asdm_paths=raw_asdms,
-                    expected_count=expected,
-                )
+                update_pipeline_state_record(conn, mous_id, download_status="error")
 
             results.append({
                 "mous_id": mous_id,
@@ -97,7 +81,7 @@ def check_for_raw_asdms(conn, dataset_dir: str, verbose: bool = False, dry_run: 
                 log.error(f"❌ [{mous_id}] {note}")
 
             if not dry_run:
-                mark_download_failure(conn, mous_id, Exception(note))
+                update_pipeline_state_record(conn, mous_id, download_status="error")
 
             results.append({
                 "mous_id": mous_id,

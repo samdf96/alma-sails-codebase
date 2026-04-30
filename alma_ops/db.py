@@ -389,6 +389,271 @@ def get_mous_spw_mapping(conn: sqlite3.Connection, mous_id: str) -> list[int]:
     return sorted(spws)
 
 
+# =====================================================================
+# imaging_state helpers
+# =====================================================================
+
+
+def get_imaging_state_record(
+    conn: sqlite3.Connection,
+    source_name: str,
+    band: str,
+    config_type: str,
+) -> sqlite3.Row | None:
+    """Fetches the imaging_state row for a given (source_name, band, config_type).
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        An open connection to the on-disk database.
+    source_name : str
+        The ALMA source name (alma_source_name from targets table).
+    band : str
+        The ALMA band (e.g. '6', '7').
+    config_type : str
+        The array configuration type ('7m' or '12m').
+
+    Returns
+    -------
+    sqlite3.Row | None
+        The matching row, or None if not found.
+    """
+    return db_fetch_one(
+        conn,
+        "SELECT * FROM imaging_state WHERE source_name=? AND band=? AND config_type=?",
+        (source_name, band, config_type),
+    )
+
+
+def update_imaging_state_record(
+    conn: sqlite3.Connection,
+    source_name: str,
+    band: str,
+    config_type: str,
+    **fields,
+):
+    """Updates one or more fields in the imaging_state table.
+
+    Also sets updated_at to the current UTC timestamp automatically.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        An open connection to the on-disk database.
+    source_name : str
+        The ALMA source name.
+    band : str
+        The ALMA band.
+    config_type : str
+        The array configuration type.
+    **fields
+        Key-value pairs of columns to update.
+    """
+    if not fields:
+        return
+
+    from datetime import datetime, timezone
+
+    fields["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    serialized = {
+        k: json.dumps(v) if isinstance(v, (list, dict)) else v
+        for k, v in fields.items()
+    }
+
+    cols = ", ".join(f"{k}=?" for k in serialized)
+    values = list(serialized.values()) + [source_name, band, config_type]
+
+    with db_transaction(conn):
+        conn.execute(
+            f"UPDATE imaging_state SET {cols} "
+            f"WHERE source_name=? AND band=? AND config_type=?",
+            values,
+        )
+
+
+def insert_imaging_state_record(
+    conn: sqlite3.Connection,
+    source_name: str,
+    band: str,
+    config_type: str,
+    imaging_dir: str | None = None,
+) -> bool:
+    """Inserts a new pending row into imaging_state. No-ops if the row already exists.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        An open connection to the on-disk database.
+    source_name : str
+        The ALMA source name.
+    band : str
+        The ALMA band.
+    config_type : str
+        The array configuration type ('7m' or '12m').
+    imaging_dir : str | None
+        Platform path to the imaging output directory, if known.
+
+    Returns
+    -------
+    bool
+        True if a new row was inserted, False if it already existed.
+    """
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    with db_transaction(conn):
+        cur = conn.execute(
+            """
+            INSERT OR IGNORE INTO imaging_state
+                (source_name, band, config_type, status, imaging_dir, created_at, updated_at)
+            VALUES (?, ?, ?, 'pending', ?, ?, ?)
+            """,
+            (source_name, band, config_type, imaging_dir, now, now),
+        )
+
+    return cur.rowcount == 1
+
+
+def get_all_imaging_state_records(
+    conn: sqlite3.Connection,
+    status: str | None = None,
+) -> list[sqlite3.Row]:
+    """Fetches all imaging_state rows, optionally filtered by status.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        An open connection to the on-disk database.
+    status : str | None
+        If provided, only rows with this status are returned.
+
+    Returns
+    -------
+    list[sqlite3.Row]
+    """
+    if status:
+        return db_fetch_all(
+            conn,
+            "SELECT * FROM imaging_state WHERE status=? ORDER BY source_name, band, config_type",
+            (status,),
+        )
+    return db_fetch_all(
+        conn,
+        "SELECT * FROM imaging_state ORDER BY source_name, band, config_type",
+    )
+
+
+def get_selfcal_complete_mous_for_imaging(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Returns all MOUS with selfcal_status='complete' and their source/band/array metadata.
+
+    Joins pipeline_state, mous, and targets to produce one row per
+    (mous_id, alma_source_name, band_list, array_type, selfcal MS paths).
+
+    Used by seed_imaging_state to determine what imaging jobs need to be created.
+
+    Returns
+    -------
+    list[sqlite3.Row]
+        Rows with columns: mous_id, project_code, alma_source_name, band_list,
+        array_type, selfcal_products_nonsub_path, mous_directory.
+    """
+    return db_fetch_all(
+        conn,
+        """
+        SELECT
+            ps.mous_id,
+            m.project_code,
+            t.alma_source_name,
+            t.band_list,
+            CASE
+                WHEN m.antenna_arrays LIKE '%CM%' THEN '7m'
+                WHEN m.obs_type = 'T'
+                  OR (    m.antenna_arrays LIKE '%PM%'
+                      AND m.antenna_arrays NOT LIKE '%DA%'
+                      AND m.antenna_arrays NOT LIKE '%DV%') THEN 'tp'
+                ELSE '12m'
+            END AS array_type,
+            ps.selfcal_products_nonsub_path,
+            ps.mous_directory
+        FROM pipeline_state ps
+        JOIN mous m ON ps.mous_id = m.mous_id
+        JOIN targets t ON t.mous_id = m.mous_id
+        WHERE ps.selfcal_status = 'complete'
+          AND ps.selfcal_products_nonsub_path IS NOT NULL
+        GROUP BY ps.mous_id, t.alma_source_name, t.band_list
+        ORDER BY t.alma_source_name, t.band_list
+        """,
+    )
+
+
+def get_imaging_mous_list(
+    conn: sqlite3.Connection,
+    source_name: str,
+    band: str,
+    config_type: str,
+) -> list[sqlite3.Row]:
+    """Returns the list of selfcal-complete MOUS contributing to a given imaging job.
+
+    Each row contains the MOUS ID, selfcal MS paths, and mous_directory so the
+    imaging flow can locate the MS files and cont.dat files.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        An open connection to the on-disk database.
+    source_name : str
+        The ALMA source name.
+    band : str
+        The ALMA band.
+    config_type : str
+        The array configuration type ('7m' or '12m').
+
+    Returns
+    -------
+    list[sqlite3.Row]
+        Rows with columns: mous_id, selfcal_products_nonsub_path, mous_directory.
+    """
+    array_condition = {
+        "7m": "m.antenna_arrays LIKE '%CM%'",
+        "12m": (
+            "m.antenna_arrays NOT LIKE '%CM%' "
+            "AND NOT (m.obs_type = 'T' "
+            "         OR (m.antenna_arrays LIKE '%PM%' "
+            "             AND m.antenna_arrays NOT LIKE '%DA%' "
+            "             AND m.antenna_arrays NOT LIKE '%DV%'))"
+        ),
+        "tp": (
+            "m.obs_type = 'T' "
+            "OR (m.antenna_arrays LIKE '%PM%' "
+            "    AND m.antenna_arrays NOT LIKE '%DA%' "
+            "    AND m.antenna_arrays NOT LIKE '%DV%')"
+        ),
+    }.get(config_type, "1=1")
+
+    return db_fetch_all(
+        conn,
+        f"""
+        SELECT
+            ps.mous_id,
+            ps.selfcal_products_nonsub_path,
+            ps.mous_directory
+        FROM pipeline_state ps
+        JOIN mous m ON ps.mous_id = m.mous_id
+        JOIN targets t ON t.mous_id = m.mous_id
+        WHERE ps.selfcal_status = 'complete'
+          AND ps.selfcal_products_nonsub_path IS NOT NULL
+          AND t.alma_source_name = ?
+          AND t.band_list = ?
+          AND {array_condition}
+        GROUP BY ps.mous_id
+        ORDER BY ps.mous_id
+        """,
+        (source_name, band),
+    )
+
+
 def get_spw_remap(conn: sqlite3.Connection, mous_id: str) -> dict | None:
     """Fetches the SPW remapping dictionary for a given mous_id, if it exists.
 
