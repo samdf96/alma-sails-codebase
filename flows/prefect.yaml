@@ -1,0 +1,73 @@
+# prefect.yaml
+# ALMA-SAILS pipeline deployments
+#
+# Deploy all flows:
+#   cd alma-sails-codebase/flows
+#   prefect deploy --all
+#
+# Deploy a single flow:
+#   prefect deploy --name mous-download
+
+name: alma-sails-flows
+prefect-version: 3.6.4
+
+build: null
+push: null
+
+pull:
+- prefect.deployments.steps.set_working_directory:
+    directory: /home/ubuntu/canfar_arc/projects/ALMA-SAILS/alma-sails-codebase/flows
+
+deployments:
+
+- name: mous-download
+  description: >
+    Download a MOUS from the NRAO SRDP service via a c-astroml CANFAR headless session.
+    The MOUS must be in 'pending' state. Advances to 'downloaded' on success.
+  entrypoint: download_flow.py:download_mous_flow
+  parameters:
+    use_staging: false
+  work_pool:
+    name: headless-runs
+    work_queue_name: null
+    job_variables: {}
+
+- name: mous-split
+  description: >
+    Split a downloaded MOUS to target-only science SPWs via a CASA pipeline headless session.
+    The MOUS must be in 'downloaded' state. Advances to 'split_complete' on success.
+  entrypoint: split_flow.py:split_mous_flow
+  parameters:
+    use_staging: false
+  work_pool:
+    name: headless-runs
+    work_queue_name: null
+    job_variables: {}
+
+- name: mous-selfcal
+  description: >
+    Run autoselfcal on a split MOUS via a CASA pipeline headless session.
+    The MOUS must be in 'split_complete' state. Advances to 'selfcal_complete' on success.
+  entrypoint: selfcal_flow.py:selfcal_mous_flow
+  parameters:
+    ncores: 4
+    ram_gb: 16
+    use_staging: false
+  work_pool:
+    name: headless-runs
+    work_queue_name: null
+    job_variables: {}
+
+- name: continuum-imaging
+  description: >
+    Run continuum imaging for one imaging unit via a CASA pipeline headless session.
+    The imaging unit must be in 'ready' or 'complete' state. Advances to 'complete' on success.
+    ncores=null launches in flexible mode (no cores/RAM pinned); ncores>1 enables parallel tclean.
+  entrypoint: imaging_flow.py:imaging_unit_flow
+  parameters:
+    robust: 0.5
+    use_staging: false
+  work_pool:
+    name: headless-runs
+    work_queue_name: null
+    job_variables: {}
