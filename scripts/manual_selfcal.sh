@@ -7,7 +7,8 @@
 #   1. Pre-flight: validate split_complete state and split products in DB
 #   2. Mark selfcal_running
 #   3. Write a minimal auto_selfcal entry script with explicit vislist
-#   4. Run mpicasa (handles findcont, selfcal loops, applycal, uvcontsub)
+#   4. Run mpicasa, or plain casa -c in flexible mode (handles findcont,
+#      selfcal loops, applycal, uvcontsub)
 #   5. Extract CORRECTED_DATA → *_targets.corrected.ms (with MD5 validation)
 #   6. Record selfcal_complete with product paths
 #
@@ -20,6 +21,9 @@
 #
 # Optional:
 #   --ncores 4      (default: 4; passed to mpicasa -n, e.g. mpicasa -n 4 casa -c ...)
+#                   pass 0 for flexible mode: plain casa -c, no mpicasa --
+#                   auto_selfcal's own MPIEnvironment check then correctly
+#                   self-selects parallel=False.
 #   --db-path PATH  (default: from alma_ops.config)
 
 set -euo pipefail
@@ -47,7 +51,7 @@ CODEBASE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 # ---------------------------------------------------------------------------
 # Pre-flight: validate state, resolve DB path and split product paths
 # ---------------------------------------------------------------------------
-read -r DB_PATH MOUS_DIR SPLIT_JSON < <(python3 -c "
+read -r DB_PATH MOUS_DIR STATE SPLIT_JSON < <(python3 -c "
 import sys, json
 sys.path.insert(0, '$CODEBASE_DIR')
 from alma_ops import db
@@ -59,8 +63,14 @@ row = db.get_pipeline_state(conn, '$MOUS_ID')
 if row is None:
     print('ERROR MOUS not found', file=__import__('sys').stderr); __import__('sys').exit(1)
 state = row['current_state']
-if state != 'split_complete':
-    print(f'ERROR Expected split_complete got {state!r}', file=__import__('sys').stderr)
+# split_complete: normal manual invocation. selfcal_running: launched via
+# selfcal_flow.py, which already advances the state itself before submitting
+# the headless session (so an OOM-killed session leaves a recoverable marker
+# instead of a stuck state) -- this script must accept both, or every
+# flow-launched run fails this check deterministically (see state_transitions
+# note for uid://A001/X335e/Xfb, 2026-06-26).
+if state not in ('split_complete', 'selfcal_running'):
+    print(f'ERROR Expected split_complete (or selfcal_running, if launched via the Prefect flow) got {state!r}', file=__import__('sys').stderr)
     __import__('sys').exit(1)
 mous_dir = db.get_mous_directory(conn, '$MOUS_ID')
 if mous_dir is None:
@@ -68,11 +78,15 @@ if mous_dir is None:
 splits = db.get_split_products(conn, '$MOUS_ID')
 if not splits:
     print('ERROR no split_products in database', file=__import__('sys').stderr); __import__('sys').exit(1)
-print(db_path, mous_dir, json.dumps([str(p) for p in splits]))
+print(db_path, mous_dir, state, json.dumps([str(p) for p in splits]))
 ")
 
 echo "[selfcal] mous_id  : $MOUS_ID"
-echo "[selfcal] ncores   : $NCORES"
+if [[ "$NCORES" == "0" ]]; then
+    echo "[selfcal] ncores   : flexible (no mpicasa)"
+else
+    echo "[selfcal] ncores   : $NCORES"
+fi
 echo "[selfcal] db_path  : $DB_PATH"
 echo "[selfcal] mous_dir : $MOUS_DIR"
 echo "[selfcal] splits:"
@@ -137,44 +151,57 @@ print('[selfcal] vislist:', basenames)
 " "$SPLIT_JSON"
 
 # ---------------------------------------------------------------------------
-# Mark as selfcal_running
+# Mark as selfcal_running (already done by selfcal_flow.py before submitting
+# the headless session -- only transition here for a direct manual invocation)
 # ---------------------------------------------------------------------------
-python3 -c "
+if [[ "$STATE" == "selfcal_running" ]]; then
+    echo "[selfcal] state already selfcal_running (launched via Prefect flow)"
+else
+    python3 -c "
 import sys; sys.path.insert(0, '$CODEBASE_DIR')
 from alma_ops.db import get_connection, record_transition
 conn = get_connection('$DB_PATH')
-record_transition(conn, mous_id='$MOUS_ID', from_state='split_complete',
+record_transition(conn, mous_id='$MOUS_ID', from_state='$STATE',
                   to_state='selfcal_running', step='selfcal')
 conn.close()
 print('[selfcal] state → selfcal_running')
 "
+fi
 echo "[selfcal] To reset after abort:"
 echo "  sqlite3 '$DB_PATH' \"UPDATE pipeline_state SET current_state='split_complete' WHERE mous_id='$MOUS_ID';\""
 
 # ---------------------------------------------------------------------------
-# Run mpicasa
+# Run mpicasa (fixed mode), or plain casa -c (flexible mode, NCORES=0) --
+# auto_selfcal's own MPIEnvironment check self-selects parallel=False when
+# not actually launched under MPI, so no other change is needed here.
 # ---------------------------------------------------------------------------
-echo "[selfcal] Starting mpicasa ($(date))..."
 echo "[selfcal] Terminal log: $TERMINAL_LOG"
 
-(cd "$AUTOSELFCAL_DIR" && mpicasa -n "$NCORES" casa --nologger --nologfile -c "$ENTRY_SCRIPT") 2>&1 | tee "$TERMINAL_LOG"
-MPICASA_EXIT=${PIPESTATUS[0]}
+if [[ "$NCORES" == "0" ]]; then
+    echo "[selfcal] Starting casa (flexible mode, no mpicasa) ($(date))..."
+    (cd "$AUTOSELFCAL_DIR" && casa --nologger --nologfile -c "$ENTRY_SCRIPT") 2>&1 | tee "$TERMINAL_LOG"
+else
+    echo "[selfcal] Starting mpicasa ($(date))..."
+    (cd "$AUTOSELFCAL_DIR" && mpicasa -n "$NCORES" casa --nologger --nologfile -c "$ENTRY_SCRIPT") 2>&1 | tee "$TERMINAL_LOG"
+fi
+CASA_EXIT=${PIPESTATUS[0]}
+CASA_RUNNER="mpicasa"; [[ "$NCORES" == "0" ]] && CASA_RUNNER="casa"
 
-if [[ "$MPICASA_EXIT" -ne 0 ]]; then
-    echo "[ERROR] mpicasa exited with code $MPICASA_EXIT" >&2
+if [[ "$CASA_EXIT" -ne 0 ]]; then
+    echo "[ERROR] $CASA_RUNNER exited with code $CASA_EXIT" >&2
     # Record failure via plain Python (no casatools needed)
     python3 -c "
 import sys; sys.path.insert(0, '$CODEBASE_DIR')
 from alma_ops.db import get_connection, record_failure
 conn = get_connection('$DB_PATH')
 record_failure(conn, mous_id='$MOUS_ID', from_state='selfcal_running',
-               error='mpicasa exited with code $MPICASA_EXIT', step='selfcal')
+               error='$CASA_RUNNER exited with code $CASA_EXIT', step='selfcal')
 conn.close()
 print('[selfcal] state → failed')
 "
     exit 1
 fi
-echo "[selfcal] mpicasa complete ($(date))"
+echo "[selfcal] $CASA_RUNNER complete ($(date))"
 
 # ---------------------------------------------------------------------------
 # Post-selfcal: extract CORRECTED_DATA, validate, record selfcal_complete

@@ -71,3 +71,16 @@ deployments:
     name: headless-runs
     work_queue_name: null
     job_variables: {}
+
+- name: line-triage-imaging
+  description: >
+    Run ADMIT-bound line-triage cube imaging for one MOUS/source via a CASA pipeline
+    headless session. The MOUS must be in 'selfcal_complete' state. Classifies spws via
+    cont.dat and advances each line_triage_unit to 'complete' on success.
+  entrypoint: line_triage_flow.py:line_triage_mous_flow
+  parameters:
+    use_staging: false
+  work_pool:
+    name: headless-runs
+    work_queue_name: null
+    job_variables: {}
