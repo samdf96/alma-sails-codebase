@@ -1,6 +1,6 @@
 # alma-sails-codebase
 
-Pipeline codebase for the ALMA-SAILS project. Handles the full data preparation workflow from raw SRDP downloads through self-calibration and continuum imaging.
+Pipeline codebase for the ALMA-SAILS project. Handles the full data preparation workflow from raw SRDP downloads through self-calibration, continuum imaging, and spectral-line identification and imaging.
 
 ## Overview
 
@@ -18,6 +18,16 @@ pending → ready → running → complete
                           → failed
 ```
 
+Once a MOUS is `selfcal_complete`, its continuum-subtracted MS can also feed a three-stage line-finding pipeline, each stage with its own FSM:
+
+```
+line_triage_unit:  ready → running → complete → failed   (dirty, niter=0 cubes per line-candidate spw, for ADMIT to scan)
+line_admit_unit:   ready → running → complete → failed   (ADMIT line ID on a completed triage cube; 1:1 with its triage unit)
+line_imaging_unit: ready → running → complete → failed   (real, niter>0 image of one human-confirmed detection; 1:1 with its detection)
+```
+
+Promotion from `line_admit_detection` to deep imaging is gated on manual review (`review_line_detections.py`, project root) rather than automatic — see `DEVLOG.md`.
+
 Work is orchestrated by Prefect flows that launch CANFAR headless sessions; the sessions do the actual work and write results back to a central SQLite database. Manual scripts mirror each flow step for interactive use.
 
 ## Codebase Structure
@@ -34,35 +44,56 @@ alma-sails-codebase/
 │   └── imaging/
 │       ├── imaging_utils.py    # run_continuum_imaging(), compute_imaging_params(), compute_b75()
 │       ├── continuum_config.py # Shared tclean parameters, automask sets, image geometry constants
-│       └── cont_dat_utils.py   # cont.dat parsing and SPW channel range conversion
+│       ├── cont_dat_utils.py   # cont.dat parsing and SPW channel range conversion
+│       ├── line_triage_config.py / line_triage_utils.py   # Dirty triage-cube imaging for ADMIT
+│       ├── line_admit_utils.py                            # ADMIT line-identification flow
+│       └── line_imaging_config.py / line_imaging_utils.py # Deep imaging of confirmed detections
 ├── flows/                      # Prefect flows and deployment config
 │   ├── prefect.yaml            # Deployment definitions (prefect deploy --all)
 │   ├── canfar_utils.py         # make_session() — shared CANFAR session helper
 │   ├── download_flow.py        # Launches c-astroml headless session for download
 │   ├── split_flow.py           # Launches CASA headless session for MS split
 │   ├── selfcal_flow.py         # Launches CASA headless session for autoselfcal
-│   └── imaging_flow.py         # Launches CASA headless session for continuum imaging
+│   ├── imaging_flow.py         # Launches CASA headless session for continuum imaging
+│   ├── line_triage_flow.py     # Launches CASA headless session for triage-cube imaging
+│   ├── line_admit_flow.py      # Launches CASA headless session for ADMIT line ID
+│   └── line_imaging_flow.py    # Launches CASA headless session for deep line imaging
 ├── scripts/                    # Manual scripts and headless session entry points
 │   ├── manual_download.py      # Download — run in c-astroml container
 │   ├── manual_split.py         # Split — run via casa -c
-│   ├── manual_selfcal.sh       # Selfcal — runs mpicasa + post_selfcal
+│   ├── manual_selfcal.sh       # Selfcal — runs mpicasa (or plain casa -c in flexible mode) + post_selfcal
 │   ├── post_selfcal.py         # Post-selfcal product extraction — run via casa -c
 │   ├── manual_continuum_imaging.py  # Continuum imaging — run via casa -c
 │   ├── batch_continuum_imaging.py   # Image N randomly-selected ready units sequentially
 │   ├── manual_contsub.py       # Continuum subtraction — run via casa -c
+│   ├── manual_line_triage_imaging.py # Dirty triage-cube imaging — run via casa -c
+│   ├── manual_admit_lineid.py        # ADMIT line identification — run via casa -c
+│   ├── manual_line_imaging.py        # Deep imaging of one confirmed detection — run via casa -c
 │   ├── mark_imaging_ready.py   # Promote eligible imaging units from pending → ready
 │   ├── reset_selfcal.py        # Recovery: reset a stuck/failed selfcal back to split_complete
 │   ├── reset_download.py       # Recovery: reset a stuck/failed download back to pending
+│   ├── reset_imaging.py        # Recovery: reset a stuck/failed continuum imaging run
+│   ├── reset_line_triage.py    # Recovery: reset a stuck/failed triage-cube imaging run
+│   ├── reset_admit.py          # Recovery: reset a stuck/failed ADMIT run
+│   ├── reset_line_imaging.py   # Recovery: reset a stuck/failed deep line-imaging run
 │   ├── headless_download.sh    # Headless entry point for download flow
 │   ├── headless_split.sh       # Headless entry point for split flow
 │   ├── headless_imaging.sh     # Headless entry point for imaging flow
 │   ├── headless_continuum_imaging.py  # Payload-driven CASA imaging driver
+│   ├── headless_line_triage_imaging.sh # Headless entry point for triage flow
+│   ├── headless_admit_lineid.sh        # Headless entry point for ADMIT flow
+│   ├── headless_line_imaging.sh        # Headless entry point for deep line-imaging flow
 │   ├── seed_database.py        # One-time DB seeding from ALMiner metadata
-│   └── migrate_v1_to_v2.py    # One-time migration from v1 serpens_main.db
+│   ├── migrate_add_field_selection_columns.py  # One-time: mosaic field-selection columns
+│   ├── migrate_add_line_triage_tables.py       # One-time: line_triage_* tables
+│   ├── migrate_add_admit_tables.py             # One-time: line_admit_* tables + targets.vlsr_kms
+│   └── migrate_add_line_imaging_tables.py      # One-time: line_imaging_* tables
 ├── DEVLOG.md                   # Architecture decisions, design notes, planned work
 ├── OPERATIONS.md               # Prefect server, workers, and deployment setup
 └── pyproject.toml
 ```
+
+Review tooling for ADMIT detections (`review_line_detections.py`) lives at the project root, not in this repo — it's project-instance-specific, not portable codebase logic.
 
 ## Database Schema
 
@@ -79,10 +110,14 @@ The SQLite database (`db/serpens_v2.db`) is organized in three layers:
 - `imaging_unit` — one row per (target, band, config_type) combination
 - `mous_imaging_unit` — junction table linking MOUSes to imaging units
 - `imaging_pipeline_state` — current state for each imaging unit
+- `line_triage_unit` / `line_triage_pipeline_state` — one row per (mous_id, target_name, spw_idx) triage cube
+- `line_admit_unit` / `line_admit_pipeline_state` — one row per completed triage unit (1:1)
+- `line_admit_detection` — every line ADMIT identified (species, frequency, `peakrms_sigma`, channel range, `review_status`) — the permanent record that survives after the triage cube itself is deleted
+- `line_imaging_unit` / `line_imaging_pipeline_state` — one row per confirmed detection (1:1)
 
 **Event layer** — append-only audit trail:
-- `state_transitions` / `imaging_state_transitions` — every FSM state change
-- `run_log` / `imaging_run_log` — step-level diagnostic payloads
+- `state_transitions` / `imaging_state_transitions` / `line_triage_state_transitions` / `line_admit_state_transitions` / `line_imaging_state_transitions` — every FSM state change
+- `run_log` / `imaging_run_log` / `line_triage_run_log` / `line_admit_run_log` / `line_imaging_run_log` — step-level diagnostic payloads
 
 Paths in the database are stored in canonical form (`/arc/projects/ALMA-SAILS/...`) and translated to the local prefix at read time. See `alma_ops/db.py` for the translation logic.
 
@@ -176,6 +211,29 @@ casa --nologger --nologfile -c scripts/batch_continuum_imaging.py --count 5
 
 Output for each imaging unit goes to `imaging/continuum/<source>/B<band>_<config>/`. Products are FITS files (`*.image.fits`, `*.image.pbcor.fits`); CASA intermediates are deleted after export by default.
 
+### Line triage, ADMIT identification, and deep line imaging
+
+Three sequential stages, each gated on the previous one completing (and, for the last stage, on manual review in between). All run via `casa -c` in a CASA container, either directly or through their matching Prefect flow (`line-triage-imaging`, `admit-lineid`, `line-imaging` deployments). Unlike continuum's `imaging_unit`, none of these units are pre-seeded — each is created lazily (`get_or_create`) the moment its precondition is actually met, since their existence depends on a pipeline result (a `cont.dat` classification, an ADMIT run, a confirmed review) rather than static survey metadata.
+
+```bash
+# 1. Triage: dirty (niter=0) cubes for every line-candidate spw of a MOUS/source
+casa --nologger --nologfile -c scripts/manual_line_triage_imaging.py \
+    --mous-id uid://A001/X.../X... --source EC_53
+
+# 2. ADMIT: line identification on one completed triage cube
+casa --nologger --nologfile -c scripts/manual_admit_lineid.py \
+    --mous-id uid://A001/X.../X... --source EC_53 --spw 3
+
+# Review identified lines and confirm/reject before deep imaging
+python review_line_detections.py                       # project root; lists pending detections
+python review_line_detections.py --confirm 2 --note "..."
+
+# 3. Deep imaging: real, niter>0 image of one confirmed detection
+casa --nologger --nologfile -c scripts/manual_line_imaging.py --detection-id 2
+```
+
+Triage output: `imaging/lines/triage/<source>/B<band>_<config>/` (dirty FITS cubes, deleted once every detection tied to them is reviewed). Deep-imaging output: `imaging/lines/final/<source>/B<band>_<config>/` (`*.image.fits`, `*.image.pbcor.fits`, one pair per confirmed detection).
+
 ## Three-Layer Architecture
 
 Each pipeline step follows the same structure:
@@ -186,7 +244,7 @@ Work unit             — does the actual work; pure callable, no DB access
 State layer           — records what happened (atomic DB transition + payload)
 ```
 
-Work units (`run_download`, `run_split`, `run_post_selfcal`, `run_continuum_imaging`) are plain Python functions. Prefect flows and manual scripts call the same work unit and write the same DB transitions. There is one implementation of each pipeline step.
+Work units (`run_download`, `run_split`, `run_post_selfcal`, `run_continuum_imaging`, `run_line_triage_imaging`, `run_admit_lineid`, `run_line_imaging`) are plain Python functions. Prefect flows and manual scripts call the same work unit and write the same DB transitions. There is one implementation of each pipeline step.
 
 ## Development Notes
 

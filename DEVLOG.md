@@ -1,5 +1,46 @@
 # ALMA-SAILS Pipeline Devlog
 
+## v2 Major Revision — Summary
+
+*2026-05-30*
+
+This revision completes the v2 architecture rewrite and merges it into `main`, replacing the v1 codebase entirely. The v1 code is no longer accessible from `main` but remains in the git history.
+
+### What changed
+
+**Core architecture**
+- Replaced scattered status columns (`selfcal_status`, `corrected_split`, etc.) with a single FSM-driven `current_state` column per MOUS, backed by an append-only `state_transitions` audit log and a structured `run_log` event table
+- Introduced a three-layer architecture (orchestration → work unit → state layer) so that Prefect flows and manual scripts call the same underlying function with no divergence
+- Pushed VM/CANFAR path duality entirely into `alma_ops/db.py` via `to_local()` / `to_canonical()`; no script above the DB layer handles path translation
+
+**Imaging pipeline (new in v2)**
+- `alma_ops/imaging/` — `run_continuum_imaging()` work unit handling tclean → impbcor → exportfits, cell size and image size computed from MS metadata, auto-multithresh masking selected by B75 baseline length
+- `imaging_flow.py` — fire-and-forget Prefect flow; flexible session mode (no cores/RAM pinned) by default; `ncores > 1` enables parallel tclean via mpicasa
+- `manual_continuum_imaging.py` and `batch_continuum_imaging.py` for interactive use
+- `mark_imaging_ready.py` to promote eligible imaging units from `pending` to `ready`
+- Imaging FSM: `pending → ready → running → complete → failed`; results (FITS paths, robust, timestamp) recorded in `imaging_pipeline_state.imaging_products`
+
+**Scripts and flows**
+- All headless entry points (`headless_download.sh`, `headless_split.sh`, `headless_imaging.sh`) are thin shell wrappers that delegate to Python drivers
+- `headless_imaging.sh` branches on `ncores`: `mpicasa -n N` for parallel, plain `casa` for single-threaded
+- Session launch logging captures stdout/stderr from the canfar library so HTTP errors are visible in Prefect flow logs
+- `reset_selfcal.py` and `reset_download.py` for safe recovery of stuck/failed MOUSes
+- `manual_contsub.py` for continuum subtraction when autoselfcal findcont fails
+
+**Documentation**
+- `DEVLOG.md` — architecture decisions, design lessons, planned work
+- `README.md` — full codebase overview including imaging pipeline
+- `OPERATIONS.md` — Prefect server, work pool, and worker setup
+- `CLAUDE.md` — codebase conventions for AI-assisted development
+
+### What is not yet in this revision
+- Line imaging (flagged as future work)
+- Imaging orchestrator flow for fully automated hands-off imaging
+- Disk verification in `mark_imaging_ready.py`
+- End-to-end test of the mpicasa parallel tclean path on a real headless session
+
+---
+
 ## v2 Architecture — Design Decisions
 
 *2026-05-19*
@@ -321,6 +362,12 @@ Wire the orchestrator deployment to an interval schedule so it runs autonomously
 
 ---
 
+## Planned: VM-Runs Cron Orchestration
+
+The `vm-runs` work pool exists (see `OPERATIONS.md`) but has nothing consuming it yet — it's reserved for a future mass-orchestration flow that would run on a cron schedule directly on the VM, rather than as a CANFAR headless session. The idea is a lightweight, always-on scheduled flow that periodically sweeps pipeline state (across MOUSes, imaging units, and now line-triage/ADMIT units) and decides what to submit next, similar in spirit to the imaging orchestrator above but scoped to the whole pipeline rather than just imaging. Not designed in detail yet — the `pipeline-state-monitoring` pool already covers a narrower version of this (DB monitor + flow initializer); `vm-runs` is meant for the actual lightweight work items that monitor decides to run directly on the VM, as opposed to submitting a headless session for anything CASA-related.
+
+---
+
 ## Known Constraint: Concurrent Imaging Jobs That Share a MOUS
 
 If multiple `imaging_unit_flow` runs are submitted to the cluster simultaneously for different imaging units that share a contributing MOUS, the headless CASA sessions will attempt to open the same `_targets.ms` files concurrently. CASA locks measurement sets during tclean access, so the second session will fail.
@@ -386,3 +433,252 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 ```
 
 This tells Python's import system where to find `alma_ops` regardless of which interpreter is running the script — CASA's Python, system Python, or a venv. The `alma_ops/__init__.py` file must exist for Python to treat the directory as a package.
+
+---
+
+## Evaluated: fil3d for streamer identification — not a fit, kept for reference
+
+*2026-07-10*
+
+Investigated `fil3d` ([a-dykim/fil3d](https://github.com/a-dykim/fil3d), Putman, Kim, Clark,
+Li, Holm-Hansen, Peek 2026, AJ 171, 76, arXiv:2511.18475) as a candidate for identifying
+streamer structures in ALMA-SAILS line cubes, as part of a broader look at filament/streamer
+identification tools (separate from the characterization side — TIPSY, `velocity_tools` —
+which is a distinct problem tackled later). Concluded it's the wrong tool for the 3D/line
+side of that search, for a structural reason rather than a fixable bug. Recorded here so the
+reasoning isn't lost; `fil3d-fork/` (this project's MIT-licensed fork, cloned as a sibling of
+`alma-sails-codebase`) is left in a working, installable state rather than reverted, in case
+the 2D-continuum use described below turns out to be worth revisiting.
+
+### What fil3d does
+
+Runs FilFinder2D independently on every velocity channel of a PPV cube, then links the
+resulting 2D masks across *adjacent* channels into 3D structures whenever the overlap
+between them (area of intersection over the smaller mask's area) exceeds 85%. Sequential,
+no channel-skipping, single-channel objects retained rather than discarded. This is confirmed
+directly from Section 3 of the paper, not inferred from the code alone.
+
+### Packaging state as forked
+
+The upstream repo (as of the Oct 2025 commit this was forked from) was not runnable:
+`core/tree.py` (the actual linking function, `find_all_trees_from_slices`) and `_const.py`
+were referenced but missing from the repo entirely — confirmed by the one open GitHub issue
+on the upstream repo, filed by someone else who hit the same thing. Packaging was also
+broken (`setup.py` used `find_packages(include=["fil3d","fil3d.*"])` against a flat
+directory layout with no nested `fil3d/` package dir, so nothing would have been discoverable
+even without the missing files).
+
+Fixed in `fil3d-fork/`, independent of the missing-files question:
+- Restructured into a proper nested `fil3d/fil3d/` package layout.
+- Replaced `setup.py` with a PEP 621 `pyproject.toml` `[project]` table.
+- Found and fixed a real dependency-resolution bug: an unbounded `numpy>=1.22` pin let the
+  resolver grab numpy 2.5.1 before checking `numba`'s actual `numpy<2.5` constraint, which
+  triggered backtracking all the way down to `numba==0.53.1`/`llvmlite==0.36.0` — a
+  combination that refuses to even build on Python 3.12. Bounding numpy to `<2.5` fixed it;
+  resolves cleanly to `numba==0.66.0`/`llvmlite==0.48.0` now.
+- Renamed the clone directory from `fil3d` to `fil3d-fork`: the restructuring left the outer
+  clone directory without its own `__init__.py`, which silently made it a hollow PEP 420
+  namespace package that shadowed the real installed package whenever Python ran with
+  `ALMA-SAILS/` on `sys.path` — a very normal cwd to be in. Verified directly (same import,
+  broken from `ALMA-SAILS/`, correct from elsewhere) before renaming.
+- Set up `structure_id_env/` as a separate `uv`-managed umbrella project (its own
+  `pyproject.toml`/`uv.lock`) for this kind of exploratory-tool testing, kept apart from
+  `alma-sails-codebase`'s locked production venv — `fil3d[cli]` is added there as an
+  editable path dependency.
+
+`core/tree.py` (the linking function itself) and `_const.py` (GALFA-HI-specific edge-of-image
+constants, architecturally wrong for per-cube ALMA data even once restored) were never
+implemented — work stopped once the conceptual issue below was identified, before writing
+the linker.
+
+### Why it doesn't fit the 3D streamer-identification use case
+
+fil3d's channel-linking rule assumes the *same spatial footprint* persists across adjacent
+velocity channels (>85% overlap) — a reasonable assumption for a Galactic HI filament with
+modest internal velocity dispersion, where the paper's own catalog shows most 3D filaments
+span only 2-3 channels. A genuine kinematic streamer is close to the opposite case: its
+defining physical signature is a large, systematic position-velocity gradient (envelope
+material near the cloud's systemic velocity, disk-adjacent material kinematically
+accelerated toward near-Keplerian velocities). That means a real streamer's emission
+*moves* in position as a function of velocity — exactly the behavior the 85%-overlap
+criterion is built to reject as "not the same structure." A strong streamer could fragment
+into disconnected short trees, or fail to link at all. The paper itself acknowledges this
+limitation in passing ("the overlap fraction may need to be smaller for datasets where the
+filaments are expected to have a large velocity gradient") but that's a threshold to loosen,
+not a fix — loosen it enough to tolerate a real streamer's gradient and it stops being a
+meaningful discriminator at all.
+
+The 2D continuum side is a different story: FilFinder's masking (arctangent flattening +
+adaptive local thresholding) was explicitly built to handle a bright compact source
+embedded in fainter extended structure — its original validation case (Koch & Rosolowsky
+2015) was Herschel dust continuum with embedded YSOs, structurally the same problem as a
+compact protostar/disk plus an asymmetric dust residual. If 2D continuum candidate-flagging
+becomes useful later, fil3d's per-channel `FilFinder2D` call (not its cross-channel linker)
+is the reusable part.
+
+### What's next instead
+
+Looking at SCOUSE (multi-component spectral decomposition) + ACORNS (agglomerative
+clustering of the fitted components, linking on point-to-point spatial/velocity/linewidth
+continuity rather than mask-shape persistence) as the 3D/line-side approach instead — its
+linking model matches a position that drifts systematically with velocity, which is the
+thing fil3d's model rejects. See the next entry for the full writeup.
+
+---
+
+## SCOUSE + ACORNS for 3D streamer identification
+
+*2026-07-10*
+
+Follow-on from the fil3d evaluation above: SCOUSE + ACORNS is a two-stage pipeline where
+each stage answers a different question, and neither stage can answer the other's —
+they're sequential, not alternatives.
+
+### SCOUSE — "what velocity components are actually present at each point in this cube?"
+
+A raw PPV cube gives intensity per pixel per channel; it doesn't say how many physically
+distinct kinematic components contribute to any one spectrum. A line of sight through both
+quiescent envelope gas and a streamer produces one blended spectrum. A single-Gaussian fit
+or a moment map averages that blend into one number and throws away exactly the distinction
+that matters — a streamer's kinematic signature is precisely what gets washed out. SCOUSE
+([jdhenshaw/scousepy](https://github.com/jdhenshaw/scousepy)) fits each spectrum with as
+many Gaussian components as the data statistically supports (derivative spectroscopy
+determines the count and initial guesses; a semi-interactive stage validates a subset of
+fits, which then guide automated fitting of the rest), and outputs a flat table — one row
+per fitted component: position, centroid velocity, linewidth, intensity. It has no concept
+of structure — component N at one pixel and component N+1 at the neighboring pixel are just
+two unrelated rows in a table as far as SCOUSE is concerned.
+
+### ACORNS — "which of these components belong to the same physical object?"
+
+ACORNS ([jdhenshaw/acorns](https://github.com/jdhenshaw/acorns)) never touches the cube —
+confirmed from its actual dependencies (astropy/numpy/scipy/matplotlib only, no cube- or
+line-fitting code anywhere in it). Its input is exactly the table SCOUSE produces. It builds
+a merge hierarchy via agglomerative clustering: every component starts as its own cluster,
+then nearest clusters merge based on physically motivated criteria — spatial separation
+under a beam, velocity difference under ~2 channels, linewidth difference under the thermal
+linewidth (Henshaw et al. 2019, Appendix B). Confirmed via a real usage example in the
+ACORNS repo (`examples/run.py`):
+
+```python
+from acorns import Acorns
+
+# dataarr_acorns columns: x, y, intensity, sigma_intensity, velocity, linewidth
+cluster_criteria = np.array([min_radius, velo_link, dv_link])
+A = Acorns.process(
+    dataarr_acorns, cluster_criteria, method="PPV",
+    min_height=min_height, pixel_size=pixel_size, relax=relax, stop=stop,
+)
+A.save_to("example.acorn")
+```
+
+`min_radius`/`velo_link`/`dv_link` are exactly the three linking criteria above;
+`min_height` sets the minimum prominence above the merge level for something to count as a
+distinct cluster; `relax` loosens each criterion for borderline cases; `stop` sets the
+significance cutoff on the hierarchy. Output is the actual grouping — "these N components,
+across these pixels and this velocity range, are one coherent structure" — which is the
+identification result itself, not an intermediate product.
+
+### Why both, and how this compares to fil3d's shape
+
+ACORNS cannot run without a component table (nothing to cluster otherwise); SCOUSE alone
+never groups components into structures (a measurement step, not a grouping step). Cube →
+components (SCOUSE) → structures (ACORNS) is one pipeline, not two options.
+
+This is the same two-stage shape as fil3d — detect-per-slice, then link-across-slices — just
+with a linking rule suited to the target. fil3d detects 2D blobs per channel and links them
+by "does the same shape persist"; SCOUSE+ACORNS detects individual velocity components per
+pixel and links them by "are neighboring points close in position *and* velocity," which
+tolerates (rather than penalizes) a position that systematically drifts with velocity — the
+defining signature of a streamer that broke fil3d's model.
+
+### Install status (tested directly, not assumed)
+
+- **ACORNS**: installs cleanly on Python 3.12 with two small workarounds — its `setup.py`
+  uses the old `astropy_helpers` build pattern and doesn't declare `extension_helpers` as a
+  build dependency (`uv pip install extension_helpers` first, then `--no-build-isolation`),
+  and `matplotlib` is imported unconditionally in `plotting.py` but missing from
+  `install_requires`. Both one-line fixes. Last real commit Jan 2024, small (9 stars, 1 open
+  issue) but not abandoned; the README's "Python 2.6+" line is stale — `setup.cfg` actually
+  enforces `>=3.7`.
+- **SCOUSE (`scousepy`)**: currently fails to build at all on Python ≥3.10.
+  `pyproject.toml`'s `build-system.requires` hard-pins `cython==0.29.14` (2019), which uses
+  `collections.Iterable` — removed from `collections` in Python 3.10. Reproduced the exact
+  failure directly. Forcing a modern Cython past that pin gets further but then hits a
+  second, unrelated packaging bug (a wheel-install step fails to locate
+  `SpectralDecomposer.py`). SCOUSE is otherwise actively maintained (pushed Feb 2025, real
+  recent commits on parallelized fitting) — this looks like nobody having tried Python ≥3.10
+  yet rather than abandonment, but it's a real, currently-unresolved blocker, not a rough
+  edge like ACORNS's.
+
+### Status / next step
+
+Not yet installed in `structure_id_env/`. Before adopting this route for real: resolve
+`scousepy`'s build (patch the Cython pin locally, then work out whatever the
+`SpectralDecomposer.py` issue is — needs its own investigation, same as fil3d got). No
+`core/tree.py`-equivalent gap here — both packages are otherwise complete, working code, not
+partial forks like fil3d was.
+
+---
+
+## Deep Line Imaging: Missed Frame Transform Mis-centered Every Window
+
+*2026-07-10*
+
+The first real test of the deep line-imaging stage (detection 2, Cyclopropenylidene,
+Serpens-SMM1) completed without error and produced a plausible-looking cube — but visual
+inspection in CARTA showed real emission rising toward the very edge of the velocity axis
+instead of sitting in the middle, with the rest of the cube pure noise. The window-centering
+math was systematically wrong, not the data.
+
+### Root cause
+
+`line_imaging_utils.compute_line_window()` derives the sky-frame frequency to center the
+imaging window on by inverting ADMIT's own line-identification math. That math involves
+*two* frame transforms, and only one was being inverted:
+
+1. ADMIT's `specutil.getspectrum()` runs every frequency through
+   `utils.undoppler(freq_sky, vlsr) = freq_sky / (1 - vlsr/c)`, shifting the raw sky/LSRK
+   frequency into a source rest frame, *before* any line searching happens at all.
+2. `LineID_AT.py`'s own velocity formula (`freqtovel`) is then applied to that already-shifted
+   frequency, not the raw sky frequency:
+   `velocity = c * (freq_rf - frequency_ghz) / freq_rf + vlsr`.
+
+The original implementation inverted step 2 correctly (recovering `freq_rf`) but stopped
+there, using `freq_rf` directly as the window center instead of also undoing step 1. Since
+`(1 - vlsr/c)` is applied twice in ADMIT's own pipeline (implicitly) but only once in the
+inversion, the resulting error is systematic and close to `2 × vlsr` in every case — not a
+per-line fluke. For this source (`vlsr=8.5` km/s), the miscentering was confirmed at
+**exactly the expected ~8.5 km/s**: the wrong window center sat at −0.15 km/s in the produced
+cube's velocity axis; the corrected center sits at +8.35 km/s — right where the real emission
+was actually rising toward the edge in CARTA.
+
+### Fix
+
+`compute_line_window()` now inverts both transforms:
+
+```python
+freq_rf       = frequency_ghz / (1 - (velocity_kms - vlsr_kms) / C_KMS)   # undo LineID_AT's velocity formula
+freq_peak_ghz = freq_rf * (1 - vlsr_kms / C_KMS)                          # undo ADMIT's own undoppler()
+```
+
+Verified against detection 2's real numbers before and after: `freq_peak_ghz` moved from
+`491.865458` GHz (wrong) to `491.851512` GHz (correct), a ~13.9 MHz shift — reproduced
+independently by hand and matching the corrected formula exactly. This affects **every**
+detection imaged through this stage, identified or "Unknown" alike (the `undoppler` inversion
+is not a no-op even in the degenerate "Unknown" case where step 2 is).
+
+### Recovery
+
+Detection 2 was re-run with `--force` after the fix and now centers correctly — confirmed
+directly in the output. No other detections had reached deep imaging yet at the time this was
+caught, so no other cleanup was needed.
+
+### Lesson for next time
+
+The original derivation (see the ADMIT integration work earlier in this file) was checked
+carefully against `LineID_AT.py`'s velocity-assignment line directly and confirmed
+self-consistent with stored `velocity_kms` values in the DB — but "reproduces ADMIT's own
+reported velocity correctly" and "recovers the true sky frequency" turned out to be two
+different claims. The bug only surfaced by actually looking at a real cube, not by re-deriving
+the algebra harder. Worth remembering for the next math-from-a-vendored-codebase derivation.
