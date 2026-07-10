@@ -17,6 +17,7 @@ DATASETS_DIR           = PROJECT_ROOT / "datasets"
 CONFIG_DIR             = PROJECT_ROOT / "config"
 CONTINUUM_IMAGING_DIR  = PROJECT_ROOT / "imaging" / "continuum"
 LINE_IMAGING_DIR       = PROJECT_ROOT / "imaging" / "lines"
+LINE_TRIAGE_DIR        = LINE_IMAGING_DIR / "triage"
 SRDP_WEBLOG_DIR        = PROJECT_ROOT / "SRDP_weblogs"
 
 # Container images
@@ -25,3 +26,4 @@ ASTROML_IMAGE = "images.canfar.net/skaha/astroml:26.03"
 
 # Auto self-calibration entry script
 AUTO_SELFCAL_SCRIPT = PROJECT_ROOT / "auto_selfcal" / "bin" / "auto_selfcal.py"
+

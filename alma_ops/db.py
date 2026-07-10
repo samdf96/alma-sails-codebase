@@ -570,3 +570,195 @@ def record_imaging_failure(
     return transition_id
 
 
+# =============================================================================
+# Line-triage reads
+# =============================================================================
+#
+# Line triage (ADMIT-bound dirty cubes) gets its own FSM, parallel to the
+# imaging one, but keyed by (mous_id, target_name, spw_idx) rather than
+# (target_name, band, config_type) — it runs per-MOUS, per-spw, since spw
+# coverage is not guaranteed to match across different MOUSes of the same
+# target (different projects/cycles routinely use different correlator setups).
+
+def get_or_create_line_triage_unit(
+    conn: sqlite3.Connection,
+    mous_id: str,
+    target_name: str,
+    spw_idx: int,
+) -> int:
+    """Return the line_triage_unit_id for (mous_id, target_name, spw_idx), creating it (and its 'ready' pipeline_state row) if absent."""
+    row = fetch_one(
+        conn,
+        "SELECT line_triage_unit_id FROM line_triage_unit WHERE mous_id=? AND target_name=? AND spw_idx=?",
+        (mous_id, target_name, spw_idx),
+    )
+    if row is not None:
+        return row["line_triage_unit_id"]
+
+    now = datetime.now(timezone.utc).isoformat()
+    with transaction(conn):
+        cur = conn.execute(
+            "INSERT INTO line_triage_unit (mous_id, target_name, spw_idx) VALUES (?, ?, ?)",
+            (mous_id, target_name, spw_idx),
+        )
+        unit_id = cur.lastrowid
+        conn.execute(
+            """
+            INSERT INTO line_triage_pipeline_state
+                (line_triage_unit_id, mous_id, target_name, spw_idx, current_state, updated_at)
+            VALUES (?, ?, ?, ?, 'ready', ?)
+            """,
+            (unit_id, mous_id, target_name, spw_idx, now),
+        )
+    return unit_id
+
+
+def get_line_triage_pipeline_state(
+    conn: sqlite3.Connection, line_triage_unit_id: int
+) -> sqlite3.Row | None:
+    """Fetch the line_triage_pipeline_state row for a given line_triage_unit_id."""
+    return fetch_one(
+        conn,
+        "SELECT * FROM line_triage_pipeline_state WHERE line_triage_unit_id=?",
+        (line_triage_unit_id,),
+    )
+
+
+def get_line_triage_units_for_mous(
+    conn: sqlite3.Connection, mous_id: str, target_name: str | None = None
+) -> list[sqlite3.Row]:
+    """Return all line_triage_pipeline_state rows for a MOUS, optionally filtered by target_name."""
+    if target_name is not None:
+        return fetch_all(
+            conn,
+            "SELECT * FROM line_triage_pipeline_state WHERE mous_id=? AND target_name=? ORDER BY spw_idx",
+            (mous_id, target_name),
+        )
+    return fetch_all(
+        conn,
+        "SELECT * FROM line_triage_pipeline_state WHERE mous_id=? ORDER BY target_name, spw_idx",
+        (mous_id,),
+    )
+
+
+# =============================================================================
+# Line-triage FSM write operations
+# =============================================================================
+
+def record_line_triage_transition(
+    conn: sqlite3.Connection,
+    line_triage_unit_id: int,
+    from_state: str | None,
+    to_state: str,
+    run_id: str | None = None,
+    note: str | None = None,
+    payload: dict | None = None,
+    step: str | None = None,
+    triage_products: dict | None = None,
+) -> int:
+    """Atomically advance a line-triage unit to a new state and record the transition."""
+    now = datetime.now(timezone.utc).isoformat()
+
+    row = get_line_triage_pipeline_state(conn, line_triage_unit_id)
+    mous_id     = row["mous_id"]     if row else None
+    target_name = row["target_name"] if row else None
+    spw_idx     = row["spw_idx"]     if row else None
+
+    with transaction(conn):
+        cur = conn.execute(
+            """
+            INSERT INTO line_triage_state_transitions
+                (line_triage_unit_id, mous_id, target_name, spw_idx, from_state, to_state, at, run_id, note)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (line_triage_unit_id, mous_id, target_name, spw_idx, from_state, to_state, now, run_id, note),
+        )
+        transition_id = cur.lastrowid
+
+        conn.execute(
+            """
+            UPDATE line_triage_pipeline_state
+            SET current_state=?, updated_at=?, last_transition_id=?
+            WHERE line_triage_unit_id=?
+            """,
+            (to_state, now, transition_id, line_triage_unit_id),
+        )
+
+        if triage_products is not None:
+            row = conn.execute(
+                "SELECT triage_products FROM line_triage_pipeline_state WHERE line_triage_unit_id=?",
+                (line_triage_unit_id,),
+            ).fetchone()
+            existing = json.loads(row[0]) if row and row[0] else []
+            if isinstance(existing, dict):
+                existing = [existing]
+            existing.append(triage_products)
+            conn.execute(
+                "UPDATE line_triage_pipeline_state SET triage_products=? WHERE line_triage_unit_id=?",
+                (json.dumps(existing), line_triage_unit_id),
+            )
+
+        if payload is not None:
+            conn.execute(
+                """
+                INSERT INTO line_triage_run_log
+                    (line_triage_unit_id, mous_id, target_name, spw_idx, run_id, step, at, payload, level)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'INFO')
+                """,
+                (line_triage_unit_id, mous_id, target_name, spw_idx,
+                 run_id, step or to_state, now, json.dumps(payload)),
+            )
+
+    return transition_id
+
+
+def record_line_triage_failure(
+    conn: sqlite3.Connection,
+    line_triage_unit_id: int,
+    from_state: str,
+    error: str,
+    run_id: str | None = None,
+    step: str | None = None,
+) -> int:
+    """Transition a line-triage unit to failed and increment failure_count."""
+    now = datetime.now(timezone.utc).isoformat()
+
+    row = get_line_triage_pipeline_state(conn, line_triage_unit_id)
+    mous_id     = row["mous_id"]     if row else None
+    target_name = row["target_name"] if row else None
+    spw_idx     = row["spw_idx"]     if row else None
+
+    with transaction(conn):
+        cur = conn.execute(
+            """
+            INSERT INTO line_triage_state_transitions
+                (line_triage_unit_id, mous_id, target_name, spw_idx, from_state, to_state, at, run_id, note)
+            VALUES (?, ?, ?, ?, ?, 'failed', ?, ?, ?)
+            """,
+            (line_triage_unit_id, mous_id, target_name, spw_idx, from_state, now, run_id, step),
+        )
+        transition_id = cur.lastrowid
+
+        conn.execute(
+            """
+            UPDATE line_triage_pipeline_state
+            SET current_state='failed', updated_at=?, last_transition_id=?,
+                failure_count = failure_count + 1
+            WHERE line_triage_unit_id=?
+            """,
+            (now, transition_id, line_triage_unit_id),
+        )
+
+        conn.execute(
+            """
+            INSERT INTO line_triage_run_log
+                (line_triage_unit_id, mous_id, target_name, spw_idx, run_id, step, at, payload, level)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ERROR')
+            """,
+            (line_triage_unit_id, mous_id, target_name, spw_idx,
+             run_id, step or "failed", now, json.dumps({"error": error})),
+        )
+
+    return transition_id
+
+
