@@ -55,13 +55,13 @@ def main(db_path: Path, dry_run: bool) -> None:
     pending_units = db.get_imaging_units_by_state(conn, "pending")
 
     if not pending_units:
-        print("No imaging units currently in 'pending' state.")
+        print("[mark-imaging-ready] No imaging units currently in 'pending' state.")
         conn.close()
         return
 
     eligible = pending_units
 
-    print(f"Found {len(pending_units)} pending imaging unit(s).\n")
+    print(f"[mark-imaging-ready] Found {len(pending_units)} pending imaging unit(s).\n")
 
     promoted = 0
     still_pending = 0
@@ -94,8 +94,8 @@ def main(db_path: Path, dry_run: bool) -> None:
             still_pending += 1
 
     prefix = "[DRY RUN] Would promote" if dry_run else "Promoted"
-    print(f"\n{prefix} {promoted} imaging unit(s) to 'ready'.")
-    print(f"Still pending: {still_pending}")
+    print(f"\n[mark-imaging-ready] {prefix} {promoted} imaging unit(s) to 'ready'.")
+    print(f"[mark-imaging-ready] Still pending: {still_pending}")
     conn.close()
 
 

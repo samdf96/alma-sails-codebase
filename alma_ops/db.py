@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -111,6 +112,20 @@ def parse_json_safe(value):
         return json.loads(value)
     except (json.JSONDecodeError, TypeError):
         return value
+
+
+def require_state(current_state: str, recoverable_states: set[str], label: str = "") -> None:
+    """Print a standard error and exit(1) if current_state is not recoverable.
+
+    Shared precondition check for reset_*.py recovery scripts, so the guard
+    and its error message stay identical across all of them rather than each
+    script re-implementing its own (slightly different) version.
+    """
+    if current_state in recoverable_states:
+        return
+    prefix = f"{label}: " if label else ""
+    print(f"[ERROR] {prefix}expected state in {recoverable_states}, got '{current_state}' — aborting")
+    sys.exit(1)
 
 
 # =============================================================================
@@ -393,11 +408,17 @@ def get_imaging_units_for_mous(conn: sqlite3.Connection, mous_id: str) -> list[s
 
 
 def get_mous_for_imaging_unit(conn: sqlite3.Connection, imaging_unit_id: int) -> list[sqlite3.Row]:
-    """Return all MOUS pipeline_state rows contributing to a given imaging unit."""
+    """Return all MOUS pipeline_state rows contributing to a given imaging unit.
+
+    Each row also carries miu.source_field_name and miu.field_ids (both
+    usually NULL) -- the per-(mous, imaging_unit) CASA field selection
+    override used when an imaging unit images only a subset of fields out
+    of a shared-name mosaic MOUS. See imaging_utils.run_continuum_imaging.
+    """
     return fetch_all(
         conn,
         """
-        SELECT ps.*
+        SELECT ps.*, miu.source_field_name, miu.field_ids
         FROM pipeline_state ps
         JOIN mous_imaging_unit miu ON ps.mous_id = miu.mous_id
         WHERE miu.imaging_unit_id=?
@@ -547,3 +568,5 @@ def record_imaging_failure(
         )
 
     return transition_id
+
+

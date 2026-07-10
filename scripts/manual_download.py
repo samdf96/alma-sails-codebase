@@ -41,9 +41,9 @@ def main(mous_id: str, srdp_url: str, db_path: Path) -> None:
         print(f"[ERROR] Expected state 'pending', got '{current_state}' — aborting")
         sys.exit(1)
 
-    print(f"[INFO] MOUS {mous_id} confirmed pending")
-    print(f"[INFO] SRDP URL: {srdp_url}")
-    print(f"[INFO] Datasets dir: {DATASETS_DIR}")
+    print(f"[manual-download] MOUS {mous_id} confirmed pending")
+    print(f"[manual-download] SRDP URL: {srdp_url}")
+    print(f"[manual-download] Datasets dir: {DATASETS_DIR}")
 
     # ------------------------------------------------------------------
     # Store the URL before starting so it's available for retries
@@ -53,7 +53,7 @@ def main(mous_id: str, srdp_url: str, db_path: Path) -> None:
     # ------------------------------------------------------------------
     # Run the download
     # ------------------------------------------------------------------
-    print(f"[INFO] Starting download...")
+    print(f"[manual-download] Starting download...")
     result = run_download(
         mous_id=mous_id,
         srdp_url=srdp_url,
@@ -91,10 +91,10 @@ def main(mous_id: str, srdp_url: str, db_path: Path) -> None:
         step="download",
     )
 
-    print(f"[INFO] Download complete in {result.duration_s:.1f}s")
-    print(f"[INFO] SHA1 verified: {result.sha1_verified}")
-    print(f"[INFO] Size: {result.size_bytes / 1e9:.2f} GB")
-    print(f"[INFO] MOUS directory: {result.download_path}")
+    print(f"[manual-download] Download complete in {result.duration_s:.1f}s")
+    print(f"[manual-download] SHA1 verified: {result.sha1_verified}")
+    print(f"[manual-download] Size: {result.size_bytes / 1e9:.2f} GB")
+    print(f"[manual-download] MOUS directory: {result.download_path}")
     print(f"[OK]   {mous_id} → downloaded")
 
     conn.close()

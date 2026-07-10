@@ -113,7 +113,10 @@ def parse_cont_dat(
                 hi = float(match.group(2))
                 ranges.append((min(lo, hi), max(lo, hi)))
 
-        if all_flag and not ranges:
+        # "ALL" means the whole spw is continuum; any frequency line that
+        # follows it is just the bookend range of that designation, not a
+        # line exclusion to carve out — ALL takes precedence regardless.
+        if all_flag:
             result[spw_idx] = _ALL
         elif ranges:
             result[spw_idx] = ranges

@@ -24,9 +24,15 @@ Usage:
 
 import argparse
 import sqlite3
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from alma_ops.utils import infer_array_config
 
 
 # -----------------------------------------------------------------------------
@@ -135,36 +141,7 @@ ALMINER_METADATA_COLS = [
 # -----------------------------------------------------------------------------
 # Inference helpers
 # -----------------------------------------------------------------------------
-
-def infer_array_config(antenna_arrays: str) -> str:
-    """Infer 12m / 7m / tp from the antenna_arrays field.
-
-    TP antennas (PM on T7xx pads) are routinely included in 12m and 7m
-    observations as reference antennas, so T7xx presence alone is not a
-    reliable TP indicator. Classification is based on the non-TP antennas:
-
-      1. Any CM antenna among non-TP antennas → 7m
-      2. ≥5 non-TP antennas                  → 12m
-      3. Any T7xx pad present                 → tp  (only PM antennas remain)
-      4. ≤4 total antennas                    → tp
-      5. Otherwise                            → 12m
-    """
-    if not antenna_arrays or pd.isna(antenna_arrays):
-        return "unknown"
-    parts = str(antenna_arrays).split()
-    pads  = [p.split(":")[0].upper() for p in parts if ":" in p]
-    names = [p.split(":")[1].upper() for p in parts if ":" in p]
-    non_tp_names = [n for n, p in zip(names, pads) if not p.startswith("T7")]
-    if any(n.startswith("CM") for n in non_tp_names):
-        return "7m"
-    if len(non_tp_names) >= 5:
-        return "12m"
-    if any(p.startswith("T7") for p in pads):
-        return "tp"
-    if len(parts) <= 4:
-        return "tp"
-    return "12m"
-
+# infer_array_config() lives in alma_ops.utils (imported above), not here.
 
 def infer_band(band_list) -> str:
     """Normalise band_list to a plain band string, e.g. '7'."""

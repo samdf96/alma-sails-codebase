@@ -47,9 +47,10 @@ from alma_ops.config import CONTINUUM_IMAGING_DIR, DB_PATH
 
 
 def _build_mous_list(conn, imaging_unit_id: int) -> tuple:
-    """Return (field_name, mous_list) for an imaging unit, or (field_name, None) if unusable."""
+    """Return (field_name, mous_list, is_mosaic) for an imaging unit, or (field_name, None, False) if unusable."""
     mous_rows = db.get_mous_for_imaging_unit(conn, imaging_unit_id)
     mous_list = []
+    is_mosaic = False
 
     ips = db.get_imaging_pipeline_state(conn, imaging_unit_id)
     field_name = ips["target_name"]
@@ -68,13 +69,34 @@ def _build_mous_list(conn, imaging_unit_id: int) -> tuple:
             print(f"    [WARNING] cont.dat not found for {mous_id} — skipping this MOUS.")
             continue
 
+        # source_field_name/field_ids are usually NULL -- only set for imaging
+        # units that select a subset of fields out of a shared-name mosaic
+        # MOUS (see migrate_add_field_selection_columns.py).
+        source_field_name = row["source_field_name"]
+        field_ids = json.loads(row["field_ids"]) if row["field_ids"] else None
+
         mous_list.append({
-            "mous_id":       mous_id,
-            "ms_paths":      [str(p) for p in ms_paths],
-            "cont_dat_path": str(cont_dat),
+            "mous_id":           mous_id,
+            "ms_paths":          [str(p) for p in ms_paths],
+            "cont_dat_path":     str(cont_dat),
+            "source_field_name": source_field_name,
+            "field_ids":         field_ids,
         })
 
-    return field_name, mous_list if mous_list else None
+        # Match on source_field_name (the actual MS field name) when set,
+        # since for a field-id-subset imaging unit alma_source_name is the
+        # shared mosaic name, not the canonical target_name (field_name).
+        target_row = next(
+            (
+                r for r in db.get_mous_targets(conn, mous_id)
+                if r["alma_source_name"] == (source_field_name or field_name)
+            ),
+            None,
+        )
+        if target_row is not None and target_row["is_mosaic"] == "T":
+            is_mosaic = True
+
+    return field_name, (mous_list if mous_list else None), is_mosaic
 
 
 def main() -> None:
@@ -103,7 +125,7 @@ def main() -> None:
         if not any(e.get("robust") == args.robust for e in existing):
             eligible_complete.append(u)
 
-    candidates = list(all_ready) + eligible_complete
+    candidates = [u for u in list(all_ready) + eligible_complete if u["config_type"] != "tp"]
 
     if not candidates:
         print(f"No imaging units available (ready or complete without robust={args.robust}).")
@@ -113,7 +135,7 @@ def main() -> None:
     n = min(args.count, len(candidates))
     selected = random.sample(candidates, n)
 
-    print(f"Found {len(all_ready)} ready + {len(eligible_complete)} complete-without-rob{args.robust} unit(s). Selected {n} at random:\n")
+    print(f"Found {len(candidates)} eligible unit(s) (tp excluded). Selected {n} at random:\n")
     for u in selected:
         print(f"  {u['target_name']}  B{u['band']}  {u['config_type']}")
     print()
@@ -131,11 +153,13 @@ def main() -> None:
         config_type = unit["config_type"]
 
         conn = db.get_connection(args.db_path)
-        field_name, mous_list = _build_mous_list(conn, imaging_unit_id)
+        field_name, mous_list, is_mosaic = _build_mous_list(conn, imaging_unit_id)
         conn.close()
 
         print(f"{'='*60}")
         print(f"[imaging] {field_name}  B{band}  {config_type}  robust={args.robust}")
+        if is_mosaic:
+            print(f"  is_mosaic: True")
 
         if not mous_list:
             print(f"  [SKIP] No usable MOUS entries — check selfcal_products and cont.dat.")
@@ -171,9 +195,11 @@ def main() -> None:
                 robust=args.robust,
                 mous_list=mous_list,
                 keep_casa_products=args.keep_casa_products,
+                is_mosaic=is_mosaic,
             )
             products_entry = dict(products)
             products_entry["robust"] = args.robust
+            products_entry["gridder"] = "mosaic" if is_mosaic else "standard"
             products_entry["completed_at"] = datetime.now(timezone.utc).isoformat()
 
             conn = db.get_connection(args.db_path)

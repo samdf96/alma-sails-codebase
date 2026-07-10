@@ -124,10 +124,18 @@ def main() -> None:
             print(f"  [WARNING] cont.dat not found for {contributing_mous_id} — skipping.")
             continue
 
+        # source_field_name/field_ids are usually NULL -- only set for imaging
+        # units that select a subset of fields out of a shared-name mosaic
+        # MOUS (see migrate_add_field_selection_columns.py).
+        source_field_name = row["source_field_name"]
+        field_ids = json.loads(row["field_ids"]) if row["field_ids"] else None
+
         mous_list.append({
-            "mous_id":       contributing_mous_id,
-            "ms_paths":      [str(p) for p in ms_paths],
-            "cont_dat_path": str(cont_dat),
+            "mous_id":           contributing_mous_id,
+            "ms_paths":          [str(p) for p in ms_paths],
+            "cont_dat_path":     str(cont_dat),
+            "source_field_name": source_field_name,
+            "field_ids":         field_ids,
         })
 
     if not mous_list:
@@ -135,18 +143,35 @@ def main() -> None:
         conn.close()
         sys.exit(1)
 
+    # --- Mosaic detection: any contributing MOUS's target row marked as a
+    # mosaic means the field needs gridder='mosaic' and mosaic-aware sizing
+    # (see compute_mosaic_imaging_params — derived from the MS pointings
+    # actually being imaged, not from survey metadata). Match on
+    # source_field_name (the actual MS field name) when set, since for a
+    # field-id-subset imaging unit alma_source_name is the shared mosaic
+    # name, not the canonical target_name.
+    is_mosaic = any(
+        target_row["is_mosaic"] == "T"
+        for entry in mous_list
+        for target_row in db.get_mous_targets(conn, entry["mous_id"])
+        if target_row["alma_source_name"] == (entry["source_field_name"] or field_name)
+    )
+
     img_dir = str(CONTINUUM_IMAGING_DIR / field_name / f"B{args.band}_{args.config}")
 
     # --- Print plan ---
     print(f"[imaging] {field_name}  B{args.band}  {args.config}  robust={args.robust}")
     print(f"  imaging_unit_id : {imaging_unit_id}  (state: {current_state})")
     print(f"  imaging_dir     : {img_dir}")
+    print(f"  is_mosaic       : {is_mosaic}")
     print(f"  contributing MOUSes ({len(mous_list)}):")
     for entry in mous_list:
         print(f"    {entry['mous_id']}")
         for p in entry["ms_paths"]:
             print(f"      {Path(p).name}")
         print(f"      cont.dat: {entry['cont_dat_path']}")
+        if entry["field_ids"]:
+            print(f"      field_ids: {entry['field_ids']}  (source_field_name: {entry['source_field_name']})")
 
     if args.dry_run:
         print("\n[dry-run] No changes made.")
@@ -179,6 +204,7 @@ def main() -> None:
             robust=args.robust,
             mous_list=mous_list,
             keep_casa_products=args.keep_casa_products,
+            is_mosaic=is_mosaic,
         )
     except Exception:
         err = traceback.format_exc()
@@ -198,6 +224,7 @@ def main() -> None:
     # --- DB: advance to complete ---
     products_entry = dict(products)
     products_entry["robust"] = args.robust
+    products_entry["gridder"] = "mosaic" if is_mosaic else "standard"
     products_entry["completed_at"] = datetime.now(timezone.utc).isoformat()
 
     conn = db.get_connection(args.db_path)

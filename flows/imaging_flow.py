@@ -26,6 +26,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import re
 import sys
 import uuid
 from datetime import datetime
@@ -104,6 +105,7 @@ def build_imaging_payload(
     mous_rows = db.get_mous_for_imaging_unit(conn, imaging_unit_id)
     mous_list = []
     skipped = []
+    is_mosaic = False
 
     for row in mous_rows:
         mous_id  = row["mous_id"]
@@ -119,17 +121,38 @@ def build_imaging_payload(
             skipped.append(f"{mous_id} (cont.dat missing)")
             continue
 
+        # source_field_name/field_ids are usually NULL -- only set for imaging
+        # units that select a subset of fields out of a shared-name mosaic
+        # MOUS (see migrate_add_field_selection_columns.py).
+        source_field_name = row["source_field_name"]
+        field_ids = json.loads(row["field_ids"]) if row["field_ids"] else None
+
         mous_list.append({
-            "mous_id":       mous_id,
-            "ms_paths":      [db.to_canonical(str(p)) for p in ms_paths],
-            "cont_dat_path": db.to_canonical(str(cont_dat)),
+            "mous_id":           mous_id,
+            "ms_paths":          [db.to_canonical(str(p)) for p in ms_paths],
+            "cont_dat_path":     db.to_canonical(str(cont_dat)),
+            "source_field_name": source_field_name,
+            "field_ids":         field_ids,
         })
+
+        # Match on source_field_name (the actual MS field name) when set,
+        # since for a field-id-subset imaging unit alma_source_name is the
+        # shared mosaic name, not the canonical target_name (source).
+        target_row = next(
+            (
+                r for r in db.get_mous_targets(conn, mous_id)
+                if r["alma_source_name"] == (source_field_name or source)
+            ),
+            None,
+        )
+        if target_row is not None and target_row["is_mosaic"] == "T":
+            is_mosaic = True
 
     conn.close()
 
     if skipped:
         for s in skipped:
-            logger.warning(f"  Skipped MOUS: {s}")
+            logger.warning(f"[{source} B{band} {config}] Skipped MOUS: {s}")
 
     if not mous_list:
         raise ValueError(
@@ -152,11 +175,12 @@ def build_imaging_payload(
         "mous_list":       mous_list,
         "ncores":          ncores or 1,
         "parallel":        parallel,
+        "is_mosaic":       is_mosaic,
     }
 
     logger.info(
         f"[{source} B{band} {config}] Payload built: "
-        f"{len(mous_list)} MOUS(es), imaging_dir={imaging_dir}"
+        f"{len(mous_list)} MOUS(es), imaging_dir={imaging_dir}, is_mosaic={is_mosaic}"
     )
     return payload
 
@@ -209,7 +233,8 @@ def launch_imaging_session(
     """
     logger = get_run_logger()
 
-    job_name = f"imaging-{source}-B{band}-{config}-{datetime.now().strftime('%Y%m%d-%H%M')}"
+    _safe = lambda s: re.sub(r"[^a-zA-Z0-9-]", "-", s)
+    job_name = f"imaging-{_safe(source)}-B{band}-{_safe(config)}-{datetime.now().strftime('%Y%m%d-%H%M')}"
     session  = make_session(use_staging)
 
     _stdout = io.StringIO()

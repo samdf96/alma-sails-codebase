@@ -67,6 +67,7 @@ def main() -> None:
     mous_list       = payload["mous_list"]
     run_id          = payload.get("run_id") or str(uuid.uuid4())
     parallel        = bool(payload.get("parallel", False))
+    is_mosaic       = bool(payload.get("is_mosaic", False))
 
     from alma_ops import db
 
@@ -94,6 +95,7 @@ def main() -> None:
             robust=robust,
             mous_list=mous_list,
             parallel=parallel,
+            is_mosaic=is_mosaic,
         )
     except Exception:
         err = traceback.format_exc()
@@ -112,6 +114,7 @@ def main() -> None:
 
     products_entry = dict(products)
     products_entry["robust"] = robust
+    products_entry["gridder"] = "mosaic" if is_mosaic else "standard"
     products_entry["completed_at"] = datetime.now(timezone.utc).isoformat()
 
     conn = db.get_connection(db_path)

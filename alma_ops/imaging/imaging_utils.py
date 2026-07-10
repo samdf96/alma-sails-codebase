@@ -150,6 +150,10 @@ def compute_imaging_params(
     the highest-resolution MS (largest max baseline → smallest cell) and the
     largest primary beam (lowest-frequency MS → largest image).
 
+    Single-pointing only — for mosaics use compute_mosaic_imaging_params,
+    which also accounts for the separation between pointings and supplies an
+    explicit phasecenter.
+
     Parameters
     ----------
     ms_paths:
@@ -272,6 +276,137 @@ def compute_imaging_params(
     return cell_str, imsize
 
 
+def compute_mosaic_imaging_params(
+    ms_paths,
+    field_name: str,
+    robust=0.5,
+    pixels_per_beam=PIXELS_PER_BEAM,
+    pb_coverage_factor=PB_COVERAGE_FACTOR,
+    field_ids_by_ms: dict | None = None,
+):
+    """Compute tclean cell, imsize, and phasecenter for a mosaic field.
+
+    A single pointing's primary beam (compute_imaging_params' default sizing)
+    only covers one pointing of a mosaic, and without an explicit phasecenter
+    tclean's gridder='mosaic' still rephases everything to the phase center
+    of the first selected pointing rather than the mosaic's true center.
+    Both the extent and the phasecenter are derived here from the actual
+    separation between this field's pointings in ms_paths' FIELD tables, not
+    from external survey metadata — this mirrors the validated approach in
+    talk_prep/line_imaging/line_imaging_driver.py's _compute_mosaic_imsize
+    (max pointing separation + PB_COVERAGE_FACTOR x PB FWHM) and
+    auto_selfcal's selfcal_helpers.get_phasecenter (median RA/Dec across
+    pointings), generalized to accept more than one MS at once.
+
+    Parameters
+    ----------
+    ms_paths:
+        One or more paths to measurement sets (str or Path).
+    field_name:
+        CASA field name shared by all of this mosaic's pointings. Used as
+        the fallback field-resolution name for any ms_path not present in
+        field_ids_by_ms.
+    robust:
+        Briggs robust weighting parameter (cell size only).
+    pixels_per_beam:
+        Target pixels across the synthesised beam minor axis.
+    pb_coverage_factor:
+        Margin added around the pointing footprint, as a multiple of the
+        single-pointing primary beam FWHM diameter.
+    field_ids_by_ms:
+        Optional {str(ms_path): [field_id, ...]} override. When an ms_path
+        has an entry here, those exact field IDs are used instead of
+        resolving field_name via msmd.fieldsforname — needed when an
+        imaging unit images only a subset of pointings out of a
+        shared-name mosaic MOUS (e.g. one field absorbed into a
+        single-pointing canonical source during clustering).
+
+    Returns
+    -------
+    cell_str : str
+    imsize : int
+    phasecenter : str
+        e.g. 'ICRS 277.45029rad 0.09405rad'.
+    """
+    try:
+        import casatools
+        import numpy as np
+    except ImportError:
+        raise RuntimeError("compute_mosaic_imaging_params must be called from inside a CASA session.")
+
+    C_MS = 299_792_458.0  # speed of light, m/s
+
+    cell_str, _ = compute_imaging_params(ms_paths, robust=robust, pixels_per_beam=pixels_per_beam)
+    cell_arcsec = float(cell_str.replace("arcsec", ""))
+
+    ra_vals, dec_vals = [], []
+    min_mean_freq_hz = float("inf")
+    antenna_diam_m = None
+
+    msmd = casatools.msmetadata()
+    for ms_path in ms_paths:
+        msmd.open(str(ms_path))
+        try:
+            fids = (field_ids_by_ms or {}).get(str(ms_path))
+            if fids is None:
+                fids = msmd.fieldsforname(field_name)
+            for fid in fids:
+                pc = msmd.phasecenter(fid)
+                ra_vals.append(pc["m0"]["value"])
+                dec_vals.append(pc["m1"]["value"])
+
+            n_spw = msmd.nspw()
+            freqs = [msmd.meanfreq(spw=i) for i in range(n_spw) if msmd.nchan(i) > 0]
+            if freqs:
+                min_mean_freq_hz = min(min_mean_freq_hz, float(np.mean(freqs)))
+
+            if antenna_diam_m is None:
+                try:
+                    diams = msmd.antennadiameter()
+                    vals = [v["value"] for v in diams.values() if v["value"] > 0]
+                    if vals:
+                        antenna_diam_m = float(np.median(vals))
+                except Exception:
+                    pass
+        finally:
+            msmd.done()
+
+    if not ra_vals:
+        raise ValueError(f"No fields named '{field_name}' found across {len(ms_paths)} MS(es).")
+    if antenna_diam_m is None:
+        antenna_diam_m = 12.0
+
+    # Deduplicate so the same physical pointing seen in multiple MSes isn't counted twice
+    unique_centers = list({(round(r, 7), round(d, 7)) for r, d in zip(ra_vals, dec_vals)})
+
+    max_sep_rad = 0.0
+    for i in range(len(unique_centers)):
+        ra1, dec1 = unique_centers[i]
+        for j in range(i + 1, len(unique_centers)):
+            ra2, dec2 = unique_centers[j]
+            dra = (ra2 - ra1) * math.cos((dec1 + dec2) / 2.0)
+            ddec = dec2 - dec1
+            max_sep_rad = max(max_sep_rad, math.sqrt(dra * dra + ddec * ddec))
+
+    max_sep_arcsec = math.degrees(max_sep_rad) * 3600.0
+    wavelength_m = C_MS / min_mean_freq_hz
+    pb_fwhm_arcsec = math.degrees(1.13 * wavelength_m / antenna_diam_m) * 3600.0
+    extent_arcsec = max_sep_arcsec + pb_coverage_factor * pb_fwhm_arcsec
+
+    min_imsize = max(int(math.ceil(extent_arcsec / cell_arcsec)), 64)
+    try:
+        import analysisUtils as au
+        imsize = au.getOptimumSize(min_imsize)
+    except (ImportError, NameError):
+        imsize = _next_fft_friendly_size(min_imsize)
+
+    ra_phasecenter = float(np.median(ra_vals))
+    dec_phasecenter = float(np.median(dec_vals))
+    phasecenter = f"ICRS {ra_phasecenter:.8f}rad {dec_phasecenter:.8f}rad"
+
+    return cell_str, imsize, phasecenter
+
+
 def _automask_label(b75: float) -> str:
     if b75 < B75_COMPACT_MAX:
         return "compact"
@@ -289,6 +424,7 @@ def run_continuum_imaging(
     mous_list: list,
     keep_casa_products: bool = False,
     parallel: bool = False,
+    is_mosaic: bool = False,
 ) -> dict:
     """Run tclean + impbcor + exportfits for one imaging unit.
 
@@ -308,11 +444,29 @@ def run_continuum_imaging(
         Briggs robust weighting parameter.
     mous_list:
         Each entry is a dict with keys ``ms_paths`` (list[str]) and
-        ``cont_dat_path`` (str).
+        ``cont_dat_path`` (str). Two further keys are optional, both default
+        to None and together describe a CASA field selection that differs
+        from `field_name` for this one contributing MOUS:
+          - ``source_field_name`` (str): the actual CASA field name in this
+            MOUS's MS, used for the cont.dat lookup and as the
+            msmd.fieldsforname fallback. Needed when `field_name` is a
+            canonical/display name (e.g. a clustered source name) that
+            differs from the shared mosaic field name actually written into
+            the MS and cont.dat.
+          - ``field_ids`` (list[int]): explicit CASA field IDs to select
+            from this MOUS, instead of every field sharing
+            `source_field_name`. Used when this imaging unit covers only
+            one or a few pointings out of a larger shared-name mosaic MOUS.
     keep_casa_products:
         If False (default), delete all CASA-format tclean intermediates
         (.image, .pb, .psf, .residual, .mask, .model, .sumwt, .image.pbcor)
         after FITS export. Set True to retain them.
+    is_mosaic:
+        If True, use gridder='mosaic' and compute_mosaic_imaging_params
+        instead of compute_imaging_params — selecting field=field_name alone
+        only gathers the visibilities; 'standard' still rephases every
+        pointing to one phase center, and a single pointing's primary beam
+        only covers one pointing's worth of the image.
     """
     import os
     import shutil
@@ -337,21 +491,26 @@ def run_continuum_imaging(
     from alma_ops.imaging.cont_dat_utils import cont_dat_to_spw_string, parse_cont_dat
     from alma_ops.imaging.continuum_config import TCLEAN_SHARED, select_automask
 
-    # 1. Build vis/spw lists from cont.dat per MOUS
+    # 1. Build vis/spw/field lists from cont.dat per MOUS
     vis_list: list = []
     spw_list: list = []
+    field_list: list = []
     all_ms_paths: list = []
+    field_ids_by_ms: dict = {}
 
     for entry in mous_list:
-        ms_paths      = entry["ms_paths"]
-        cont_dat_path = entry["cont_dat_path"]
+        ms_paths          = entry["ms_paths"]
+        cont_dat_path     = entry["cont_dat_path"]
+        source_field_name = entry.get("source_field_name") or field_name
+        field_ids         = entry.get("field_ids")
+        field_selection    = ",".join(str(f) for f in field_ids) if field_ids else source_field_name
 
         print(f"  [cont.dat] {_Path(cont_dat_path).parent.name}", flush=True)
-        cont_ranges = parse_cont_dat(cont_dat_path, field_name)
+        cont_ranges = parse_cont_dat(cont_dat_path, source_field_name)
 
         if not cont_ranges:
             print(
-                f"  [WARNING] No cont.dat entries for field '{field_name}' in "
+                f"  [WARNING] No cont.dat entries for field '{source_field_name}' in "
                 f"{cont_dat_path} — skipping this MOUS.",
                 flush=True,
             )
@@ -364,8 +523,11 @@ def run_continuum_imaging(
                 continue
             vis_list.append(ms_path)
             spw_list.append(spw_str)
+            field_list.append(field_selection)
             all_ms_paths.append(ms_path)
-            print(f"    {_Path(ms_path).name}  spw: {spw_str}", flush=True)
+            if field_ids:
+                field_ids_by_ms[str(ms_path)] = field_ids
+            print(f"    {_Path(ms_path).name}  spw: {spw_str}  field: {field_selection}", flush=True)
 
     if not vis_list:
         raise ValueError(f"No usable MS/cont.dat pairs for {field_name} B{band} {config_type}.")
@@ -376,10 +538,17 @@ def run_continuum_imaging(
     automask = select_automask(b75)
     print(f"    B75={b75:.0f}m  →  {_automask_label(b75)}", flush=True)
 
-    # 3. Cell size and image size from MS metadata
+    # 3. Cell size, image size, and (for mosaics) phasecenter from MS metadata
     print("  [params] computing cell size and image size …", flush=True)
-    cell_str, imsize = compute_imaging_params(vis_list, robust=robust)
-    print(f"    cell={cell_str}  imsize={imsize}", flush=True)
+    phasecenter = None
+    if is_mosaic:
+        cell_str, imsize, phasecenter = compute_mosaic_imaging_params(
+            vis_list, field_name, robust=robust, field_ids_by_ms=field_ids_by_ms or None,
+        )
+        print(f"    cell={cell_str}  imsize={imsize}  gridder=mosaic  phasecenter={phasecenter}", flush=True)
+    else:
+        cell_str, imsize = compute_imaging_params(vis_list, robust=robust)
+        print(f"    cell={cell_str}  imsize={imsize}  gridder=standard", flush=True)
 
     # 4. tclean
     img_base = os.path.join(imaging_dir, f"{field_name}_B{band}_{config_type}_rob{robust:.1f}_cont")
@@ -390,16 +559,27 @@ def run_continuum_imaging(
         "vis":       vis_list,
         "spw":       spw_list,
         "imagename": img_base,
-        "field":     field_name,
+        "field":     field_list,
         "imsize":    [imsize, imsize],
         "cell":      cell_str,
         "robust":    robust,
         "parallel":  parallel,
+        "gridder":   "mosaic" if is_mosaic else "standard",
     })
+    if phasecenter is not None:
+        tclean_params["phasecenter"] = phasecenter
 
-    print(f"  [tclean] starting … (parallel={parallel})", flush=True)
-    tclean(**tclean_params)
-    print("  [tclean] finished.", flush=True)
+    # TempLattice files are written to cwd by CASA, not to imagename's directory.
+    # Chdir into imaging_dir so they land alongside the image products, not in the
+    # project root or wherever the user launched casa from.
+    _orig_dir = os.getcwd()
+    os.chdir(imaging_dir)
+    try:
+        print(f"  [tclean] starting … (parallel={parallel})", flush=True)
+        tclean(**tclean_params)
+        print("  [tclean] finished.", flush=True)
+    finally:
+        os.chdir(_orig_dir)
 
     # 5. Primary beam correction
     image_path       = img_base + ".image"
@@ -453,6 +633,8 @@ def run_continuum_imaging(
         "image_pbcor_fits":     pbcor_fits_path,
         "casa_products_cleaned": not keep_casa_products,
     }
+    if phasecenter is not None:
+        result["phasecenter"] = phasecenter
     if keep_casa_products:
         result["image"]      = image_path
         result["image_pbcor"] = pbcor_image

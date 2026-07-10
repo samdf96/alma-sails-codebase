@@ -73,7 +73,7 @@ def main(
         except ValueError:
             print(f"[ERROR] --spw value could not be parsed as integers: {spw_override!r}")
             sys.exit(1)
-        print(f"[INFO] SPW override active — using {spws} (ignoring alminer_metadata)")
+        print(f"[manual-split] SPW override active — using {spws} (ignoring alminer_metadata)")
     else:
         spws = db.get_mous_science_spws(conn, mous_id)
         if not spws:
@@ -94,17 +94,17 @@ def main(
     log_path = Path(logfile) if logfile else mous_directory / f"casa-{datetime.now().strftime('%Y%m%d-%H%M%S')}-split.log"
     casalog.setlogfile(str(log_path))  # noqa: F821 — casalog is a CASA global
 
-    print(f"[INFO] MOUS {mous_id} confirmed downloaded")
-    print(f"[INFO] MOUS directory: {mous_directory}")
-    print(f"[INFO] Science SPWs:   {spws}{' (override)' if spw_override else ''}")
-    print(f"[INFO] Target fields:  {field_names}")
-    print(f"[INFO] Data column:    {datacolumn}")
-    print(f"[INFO] CASA log:       {log_path}")
+    print(f"[manual-split] MOUS {mous_id} confirmed downloaded")
+    print(f"[manual-split] MOUS directory: {mous_directory}")
+    print(f"[manual-split] Science SPWs:   {spws}{' (override)' if spw_override else ''}")
+    print(f"[manual-split] Target fields:  {field_names}")
+    print(f"[manual-split] Data column:    {datacolumn}")
+    print(f"[manual-split] CASA log:       {log_path}")
 
     # ------------------------------------------------------------------
     # Run split
     # ------------------------------------------------------------------
-    print(f"[INFO] Starting split...")
+    print(f"[manual-split] Starting split...")
     result = run_split(
         mous_id=mous_id,
         mous_directory=mous_directory,
@@ -142,9 +142,9 @@ def main(
         step="split",
     )
 
-    print(f"[INFO] Split complete in {result.duration_s:.1f}s")
-    print(f"[INFO] SPW map (original → new index): {result.spw_map}")
-    print(f"[INFO] Products ({len(result.split_products)}):")
+    print(f"[manual-split] Split complete in {result.duration_s:.1f}s")
+    print(f"[manual-split] SPW map (original → new index): {result.spw_map}")
+    print(f"[manual-split] Products ({len(result.split_products)}):")
     for p in result.split_products:
         print(f"         {p}")
     print(f"[OK]   {mous_id} → split_complete")

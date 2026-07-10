@@ -79,9 +79,7 @@ def main(mous_id: str, db_path: Path) -> None:
         sys.exit(1)
 
     current_state = row["current_state"]
-    if current_state not in _RECOVERABLE_STATES:
-        print(f"[ERROR] Expected state in {_RECOVERABLE_STATES}, got '{current_state}' — aborting")
-        sys.exit(1)
+    db.require_state(current_state, _RECOVERABLE_STATES)
 
     mous_dir = db.get_mous_directory(conn, mous_id)
     if mous_dir is None:
