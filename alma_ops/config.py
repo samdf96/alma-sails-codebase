@@ -27,3 +27,8 @@ ASTROML_IMAGE = "images.canfar.net/skaha/astroml:26.03"
 # Auto self-calibration entry script
 AUTO_SELFCAL_SCRIPT = PROJECT_ROOT / "auto_selfcal" / "bin" / "auto_selfcal.py"
 
+# ADMIT (ALMA Data Mining Toolkit) checkout used for line identification on
+# triage cubes. Not pip-installed -- imported by inserting this path at the
+# front of sys.path. See admit_local_patches.diff at the project root for
+# the local Python-3-compatibility fixes this checkout needs (not upstream).
+ADMIT_ROOT = PROJECT_ROOT / "admit"

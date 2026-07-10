@@ -762,3 +762,246 @@ def record_line_triage_failure(
     return transition_id
 
 
+# =============================================================================
+# ADMIT line-identification FSM — one line_admit_unit per completed
+# line_triage_unit (1:1, not a fan-out). mous_id/target_name/spw_idx are
+# denormalized from the parent line_triage_unit for query convenience,
+# matching the line-triage tables' own pattern.
+# =============================================================================
+
+def get_or_create_line_admit_unit(conn: sqlite3.Connection, line_triage_unit_id: int) -> int:
+    """Return the line_admit_unit_id for a line_triage_unit_id, creating it
+    (and its 'ready' pipeline_state row) if absent. The parent
+    line_triage_unit must already exist and be 'complete'."""
+    row = fetch_one(
+        conn,
+        "SELECT line_admit_unit_id FROM line_admit_unit WHERE line_triage_unit_id=?",
+        (line_triage_unit_id,),
+    )
+    if row is not None:
+        return row["line_admit_unit_id"]
+
+    triage_row = get_line_triage_pipeline_state(conn, line_triage_unit_id)
+    if triage_row is None:
+        raise ValueError(f"No line_triage_unit_id={line_triage_unit_id} found")
+
+    now = datetime.now(timezone.utc).isoformat()
+    with transaction(conn):
+        cur = conn.execute(
+            "INSERT INTO line_admit_unit (line_triage_unit_id) VALUES (?)",
+            (line_triage_unit_id,),
+        )
+        unit_id = cur.lastrowid
+        conn.execute(
+            """
+            INSERT INTO line_admit_pipeline_state
+                (line_admit_unit_id, line_triage_unit_id, mous_id, target_name, spw_idx,
+                 current_state, updated_at)
+            VALUES (?, ?, ?, ?, ?, 'ready', ?)
+            """,
+            (unit_id, line_triage_unit_id, triage_row["mous_id"], triage_row["target_name"],
+             triage_row["spw_idx"], now),
+        )
+    return unit_id
+
+
+def get_line_admit_pipeline_state(conn: sqlite3.Connection, line_admit_unit_id: int) -> sqlite3.Row | None:
+    """Fetch the line_admit_pipeline_state row for a given line_admit_unit_id."""
+    return fetch_one(
+        conn,
+        "SELECT * FROM line_admit_pipeline_state WHERE line_admit_unit_id=?",
+        (line_admit_unit_id,),
+    )
+
+
+def get_line_admit_unit_for_triage_unit(conn: sqlite3.Connection, line_triage_unit_id: int) -> sqlite3.Row | None:
+    """Fetch the line_admit_pipeline_state row for a given parent line_triage_unit_id, if any."""
+    return fetch_one(
+        conn,
+        "SELECT * FROM line_admit_pipeline_state WHERE line_triage_unit_id=?",
+        (line_triage_unit_id,),
+    )
+
+
+def record_line_admit_transition(
+    conn: sqlite3.Connection,
+    line_admit_unit_id: int,
+    from_state: str | None,
+    to_state: str,
+    run_id: str | None = None,
+    note: str | None = None,
+    payload: dict | None = None,
+    step: str | None = None,
+    admit_products: dict | None = None,
+) -> int:
+    """Atomically advance a line-admit unit to a new state and record the transition."""
+    now = datetime.now(timezone.utc).isoformat()
+
+    row = get_line_admit_pipeline_state(conn, line_admit_unit_id)
+    line_triage_unit_id = row["line_triage_unit_id"] if row else None
+    mous_id              = row["mous_id"]              if row else None
+    target_name           = row["target_name"]           if row else None
+    spw_idx                = row["spw_idx"]                if row else None
+
+    with transaction(conn):
+        cur = conn.execute(
+            """
+            INSERT INTO line_admit_state_transitions
+                (line_admit_unit_id, line_triage_unit_id, mous_id, target_name, spw_idx,
+                 from_state, to_state, at, run_id, note)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (line_admit_unit_id, line_triage_unit_id, mous_id, target_name, spw_idx,
+             from_state, to_state, now, run_id, note),
+        )
+        transition_id = cur.lastrowid
+
+        conn.execute(
+            """
+            UPDATE line_admit_pipeline_state
+            SET current_state=?, updated_at=?, last_transition_id=?
+            WHERE line_admit_unit_id=?
+            """,
+            (to_state, now, transition_id, line_admit_unit_id),
+        )
+
+        if admit_products is not None:
+            conn.execute(
+                "UPDATE line_admit_pipeline_state SET admit_products=? WHERE line_admit_unit_id=?",
+                (json.dumps(admit_products), line_admit_unit_id),
+            )
+
+        if payload is not None:
+            conn.execute(
+                """
+                INSERT INTO line_admit_run_log
+                    (line_admit_unit_id, line_triage_unit_id, mous_id, target_name, spw_idx,
+                     run_id, step, at, payload, level)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'INFO')
+                """,
+                (line_admit_unit_id, line_triage_unit_id, mous_id, target_name, spw_idx,
+                 run_id, step or to_state, now, json.dumps(payload)),
+            )
+
+    return transition_id
+
+
+def record_line_admit_failure(
+    conn: sqlite3.Connection,
+    line_admit_unit_id: int,
+    from_state: str,
+    error: str,
+    run_id: str | None = None,
+    step: str | None = None,
+) -> int:
+    """Transition a line-admit unit to failed and increment failure_count."""
+    now = datetime.now(timezone.utc).isoformat()
+
+    row = get_line_admit_pipeline_state(conn, line_admit_unit_id)
+    line_triage_unit_id = row["line_triage_unit_id"] if row else None
+    mous_id              = row["mous_id"]              if row else None
+    target_name           = row["target_name"]           if row else None
+    spw_idx                = row["spw_idx"]                if row else None
+
+    with transaction(conn):
+        cur = conn.execute(
+            """
+            INSERT INTO line_admit_state_transitions
+                (line_admit_unit_id, line_triage_unit_id, mous_id, target_name, spw_idx,
+                 from_state, to_state, at, run_id, note)
+            VALUES (?, ?, ?, ?, ?, ?, 'failed', ?, ?, ?)
+            """,
+            (line_admit_unit_id, line_triage_unit_id, mous_id, target_name, spw_idx,
+             from_state, now, run_id, step),
+        )
+        transition_id = cur.lastrowid
+
+        conn.execute(
+            """
+            UPDATE line_admit_pipeline_state
+            SET current_state='failed', updated_at=?, last_transition_id=?,
+                failure_count = failure_count + 1
+            WHERE line_admit_unit_id=?
+            """,
+            (now, transition_id, line_admit_unit_id),
+        )
+
+        conn.execute(
+            """
+            INSERT INTO line_admit_run_log
+                (line_admit_unit_id, line_triage_unit_id, mous_id, target_name, spw_idx,
+                 run_id, step, at, payload, level)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ERROR')
+            """,
+            (line_admit_unit_id, line_triage_unit_id, mous_id, target_name, spw_idx,
+             run_id, step or "failed", now, json.dumps({"error": error})),
+        )
+
+    return transition_id
+
+
+def insert_line_admit_detections(
+    conn: sqlite3.Connection, line_admit_unit_id: int, detections: list[dict],
+) -> None:
+    """Bulk-insert parsed lltable.N.json rows as line_admit_detection rows.
+
+    Each dict is expected to have keys matching ADMIT's LineList table
+    columns: frequency, uid, formula, name, transition, velocity, peakrms,
+    peakintensity, startchan, endchan, blend (see alma_ops.imaging.line_admit_utils
+    for the parser that produces these dicts from lltable.N.json)."""
+    with transaction(conn):
+        for d in detections:
+            conn.execute(
+                """
+                INSERT INTO line_admit_detection
+                    (line_admit_unit_id, frequency_ghz, uid, formula, species_name, transition,
+                     velocity_kms, peakrms_sigma, peakintensity_jybeam, startchan, endchan, blend_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (line_admit_unit_id, d["frequency"], d["uid"], d.get("formula"), d.get("name"),
+                 d.get("transition"), d.get("velocity"), d.get("peakrms"), d.get("peakintensity"),
+                 d.get("startchan"), d.get("endchan"), d.get("blend")),
+            )
+
+
+def get_line_admit_detections(
+    conn: sqlite3.Connection, line_admit_unit_id: int | None = None, review_status: str | None = None,
+) -> list[sqlite3.Row]:
+    """Fetch line_admit_detection rows, optionally filtered by unit and/or review_status."""
+    query = "SELECT * FROM line_admit_detection WHERE 1=1"
+    params: list = []
+    if line_admit_unit_id is not None:
+        query += " AND line_admit_unit_id=?"
+        params.append(line_admit_unit_id)
+    if review_status is not None:
+        query += " AND review_status=?"
+        params.append(review_status)
+    query += " ORDER BY line_admit_unit_id, frequency_ghz"
+    return fetch_all(conn, query, tuple(params))
+
+
+def update_detection_review(
+    conn: sqlite3.Connection, line_admit_detection_id: int, review_status: str, note: str | None = None,
+) -> None:
+    """Set review_status ('confirmed' | 'rejected' | 'pending') on one detection."""
+    now = datetime.now(timezone.utc).isoformat()
+    with transaction(conn):
+        conn.execute(
+            """
+            UPDATE line_admit_detection
+            SET review_status=?, reviewed_at=?, reviewed_note=?
+            WHERE line_admit_detection_id=?
+            """,
+            (review_status, now, note, line_admit_detection_id),
+        )
+
+
+def get_line_admit_detection(conn: sqlite3.Connection, line_admit_detection_id: int) -> sqlite3.Row | None:
+    """Fetch a single line_admit_detection row by id."""
+    return fetch_one(
+        conn,
+        "SELECT * FROM line_admit_detection WHERE line_admit_detection_id=?",
+        (line_admit_detection_id,),
+    )
+
+
