@@ -1005,3 +1005,206 @@ def get_line_admit_detection(conn: sqlite3.Connection, line_admit_detection_id: 
     )
 
 
+# =============================================================================
+# Deep line-imaging FSM — one line_imaging_unit per confirmed line_admit_detection
+# (1:1, not a fan-out — same shape as line_admit_unit's own 1:1 relationship to
+# line_triage_unit). mous_id/target_name/spw_idx/species_name/frequency_ghz are
+# denormalized from the parent detection for query convenience; unlike
+# line_admit_unit, multiple line_imaging_unit rows can share one spw (several
+# confirmed lines can live in the same spw), so species_name/frequency_ghz are
+# what keep logs distinguishable when filtered by spw.
+# =============================================================================
+
+def get_or_create_line_imaging_unit(conn: sqlite3.Connection, line_admit_detection_id: int) -> int:
+    """Return the line_imaging_unit_id for a line_admit_detection_id, creating
+    it (and its 'ready' pipeline_state row) if absent. Does NOT check
+    review_status — that precondition belongs to the caller's pre-flight
+    check, matching how get_or_create_line_admit_unit doesn't check its
+    parent's state either."""
+    row = fetch_one(
+        conn,
+        "SELECT line_imaging_unit_id FROM line_imaging_unit WHERE line_admit_detection_id=?",
+        (line_admit_detection_id,),
+    )
+    if row is not None:
+        return row["line_imaging_unit_id"]
+
+    detection = get_line_admit_detection(conn, line_admit_detection_id)
+    if detection is None:
+        raise ValueError(f"No line_admit_detection_id={line_admit_detection_id} found")
+    admit_row = get_line_admit_pipeline_state(conn, detection["line_admit_unit_id"])
+    if admit_row is None:
+        raise ValueError(f"No line_admit_pipeline_state for line_admit_unit_id={detection['line_admit_unit_id']}")
+
+    now = datetime.now(timezone.utc).isoformat()
+    with transaction(conn):
+        cur = conn.execute(
+            "INSERT INTO line_imaging_unit (line_admit_detection_id) VALUES (?)",
+            (line_admit_detection_id,),
+        )
+        unit_id = cur.lastrowid
+        conn.execute(
+            """
+            INSERT INTO line_imaging_pipeline_state
+                (line_imaging_unit_id, line_admit_detection_id, mous_id, target_name, spw_idx,
+                 species_name, frequency_ghz, current_state, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', ?)
+            """,
+            (unit_id, line_admit_detection_id, admit_row["mous_id"], admit_row["target_name"],
+             admit_row["spw_idx"], detection["species_name"], detection["frequency_ghz"], now),
+        )
+    return unit_id
+
+
+def get_line_imaging_pipeline_state(conn: sqlite3.Connection, line_imaging_unit_id: int) -> sqlite3.Row | None:
+    """Fetch the line_imaging_pipeline_state row for a given line_imaging_unit_id."""
+    return fetch_one(
+        conn,
+        "SELECT * FROM line_imaging_pipeline_state WHERE line_imaging_unit_id=?",
+        (line_imaging_unit_id,),
+    )
+
+
+def get_line_imaging_unit_for_detection(conn: sqlite3.Connection, line_admit_detection_id: int) -> sqlite3.Row | None:
+    """Fetch the line_imaging_pipeline_state row for a given parent line_admit_detection_id, if any."""
+    return fetch_one(
+        conn,
+        "SELECT * FROM line_imaging_pipeline_state WHERE line_admit_detection_id=?",
+        (line_admit_detection_id,),
+    )
+
+
+def record_line_imaging_transition(
+    conn: sqlite3.Connection,
+    line_imaging_unit_id: int,
+    from_state: str | None,
+    to_state: str,
+    run_id: str | None = None,
+    note: str | None = None,
+    payload: dict | None = None,
+    step: str | None = None,
+    imaging_products: dict | None = None,
+) -> int:
+    """Atomically advance a line-imaging unit to a new state and record the
+    transition. imaging_products is appended to a JSON list (like
+    imaging_pipeline_state.imaging_products), not overwritten like
+    line_admit_pipeline_state.admit_products — a confirmed line can
+    reasonably be re-imaged with different robust/padding, and history is
+    worth keeping."""
+    now = datetime.now(timezone.utc).isoformat()
+
+    row = get_line_imaging_pipeline_state(conn, line_imaging_unit_id)
+    mous_id       = row["mous_id"]       if row else None
+    target_name    = row["target_name"]    if row else None
+    spw_idx         = row["spw_idx"]         if row else None
+    species_name     = row["species_name"]     if row else None
+    frequency_ghz      = row["frequency_ghz"]    if row else None
+
+    with transaction(conn):
+        cur = conn.execute(
+            """
+            INSERT INTO line_imaging_state_transitions
+                (line_imaging_unit_id, line_admit_detection_id, mous_id, target_name, spw_idx,
+                 species_name, frequency_ghz, from_state, to_state, at, run_id, note)
+            VALUES (?, (SELECT line_admit_detection_id FROM line_imaging_unit WHERE line_imaging_unit_id=?),
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (line_imaging_unit_id, line_imaging_unit_id, mous_id, target_name, spw_idx,
+             species_name, frequency_ghz, from_state, to_state, now, run_id, note),
+        )
+        transition_id = cur.lastrowid
+
+        conn.execute(
+            """
+            UPDATE line_imaging_pipeline_state
+            SET current_state=?, updated_at=?, last_transition_id=?
+            WHERE line_imaging_unit_id=?
+            """,
+            (to_state, now, transition_id, line_imaging_unit_id),
+        )
+
+        if imaging_products is not None:
+            row = conn.execute(
+                "SELECT imaging_products FROM line_imaging_pipeline_state WHERE line_imaging_unit_id=?",
+                (line_imaging_unit_id,),
+            ).fetchone()
+            existing = json.loads(row[0]) if row and row[0] else []
+            if isinstance(existing, dict):
+                existing = [existing]
+            existing.append(imaging_products)
+            conn.execute(
+                "UPDATE line_imaging_pipeline_state SET imaging_products=? WHERE line_imaging_unit_id=?",
+                (json.dumps(existing), line_imaging_unit_id),
+            )
+
+        if payload is not None:
+            conn.execute(
+                """
+                INSERT INTO line_imaging_run_log
+                    (line_imaging_unit_id, line_admit_detection_id, mous_id, target_name, spw_idx,
+                     species_name, frequency_ghz, run_id, step, at, payload, level)
+                VALUES (?, (SELECT line_admit_detection_id FROM line_imaging_unit WHERE line_imaging_unit_id=?),
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, 'INFO')
+                """,
+                (line_imaging_unit_id, line_imaging_unit_id, mous_id, target_name, spw_idx,
+                 species_name, frequency_ghz, run_id, step or to_state, now, json.dumps(payload)),
+            )
+
+    return transition_id
+
+
+def record_line_imaging_failure(
+    conn: sqlite3.Connection,
+    line_imaging_unit_id: int,
+    from_state: str,
+    error: str,
+    run_id: str | None = None,
+    step: str | None = None,
+) -> int:
+    """Transition a line-imaging unit to failed and increment failure_count."""
+    now = datetime.now(timezone.utc).isoformat()
+
+    row = get_line_imaging_pipeline_state(conn, line_imaging_unit_id)
+    mous_id       = row["mous_id"]       if row else None
+    target_name    = row["target_name"]    if row else None
+    spw_idx         = row["spw_idx"]         if row else None
+    species_name     = row["species_name"]     if row else None
+    frequency_ghz      = row["frequency_ghz"]    if row else None
+
+    with transaction(conn):
+        cur = conn.execute(
+            """
+            INSERT INTO line_imaging_state_transitions
+                (line_imaging_unit_id, line_admit_detection_id, mous_id, target_name, spw_idx,
+                 species_name, frequency_ghz, from_state, to_state, at, run_id, note)
+            VALUES (?, (SELECT line_admit_detection_id FROM line_imaging_unit WHERE line_imaging_unit_id=?),
+                    ?, ?, ?, ?, ?, ?, 'failed', ?, ?, ?)
+            """,
+            (line_imaging_unit_id, line_imaging_unit_id, mous_id, target_name, spw_idx,
+             species_name, frequency_ghz, from_state, now, run_id, step),
+        )
+        transition_id = cur.lastrowid
+
+        conn.execute(
+            """
+            UPDATE line_imaging_pipeline_state
+            SET current_state='failed', updated_at=?, last_transition_id=?,
+                failure_count = failure_count + 1
+            WHERE line_imaging_unit_id=?
+            """,
+            (now, transition_id, line_imaging_unit_id),
+        )
+
+        conn.execute(
+            """
+            INSERT INTO line_imaging_run_log
+                (line_imaging_unit_id, line_admit_detection_id, mous_id, target_name, spw_idx,
+                 species_name, frequency_ghz, run_id, step, at, payload, level)
+            VALUES (?, (SELECT line_admit_detection_id FROM line_imaging_unit WHERE line_imaging_unit_id=?),
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ERROR')
+            """,
+            (line_imaging_unit_id, line_imaging_unit_id, mous_id, target_name, spw_idx,
+             species_name, frequency_ghz, run_id, step or "failed", now, json.dumps({"error": error})),
+        )
+
+    return transition_id
