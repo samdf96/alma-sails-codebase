@@ -84,3 +84,31 @@ deployments:
     name: headless-runs
     work_queue_name: null
     job_variables: {}
+
+- name: admit-lineid
+  description: >
+    Run ADMIT line identification on a completed line-triage cube via a CASA pipeline
+    headless session. The parent line_triage_unit must be in 'complete' state.
+    Advances line_admit_unit to 'complete' on success; detections written to
+    line_admit_detection with review_status='pending'.
+  entrypoint: line_admit_flow.py:admit_lineid_flow
+  parameters:
+    use_staging: false
+  work_pool:
+    name: headless-runs
+    work_queue_name: null
+    job_variables: {}
+
+- name: line-imaging
+  description: >
+    Run deep line imaging for one confirmed line_admit_detection via a CASA pipeline
+    headless session. The detection must have review_status='confirmed'. Advances
+    line_imaging_unit to 'complete' on success.
+    ncores=null launches in flexible mode; ncores>1 enables parallel tclean.
+  entrypoint: line_imaging_flow.py:line_imaging_flow
+  parameters:
+    use_staging: false
+  work_pool:
+    name: headless-runs
+    work_queue_name: null
+    job_variables: {}
