@@ -201,16 +201,53 @@ python alma-sails-codebase/scripts/reset_line_imaging.py --detection-id <detecti
 
 ---
 
-## Inspection scripts (project root)
+## Audit and review scripts
 
-These scripts live in `<project-root>`, not inside the codebase.
+These live in `scripts/` alongside the processing scripts and run from the project root with standard Python (no CASA required).
 
-| Script | Description |
-|---|---|
-| `pipeline_status.py` | Count of MOUSes and units at each FSM state |
-| `disk_usage_summary.py` | Disk usage grouped by pipeline state |
-| `review_line_detections.py` | List, confirm, or reject ADMIT line detections |
-| `line_config_editor.py` | Interactive editor for `config/line_config.json` |
+### `review_line_detections.py` — Python
+
+List, confirm, or reject ADMIT line detections.
+
+```bash
+# List all pending detections
+python alma-sails-codebase/scripts/review_line_detections.py
+
+# Filter by MOUS, source, or SPW
+python alma-sails-codebase/scripts/review_line_detections.py \
+    --mous-id <mous-id> --source <source> --spw <spw>
+
+# Confirm or reject a specific detection
+python alma-sails-codebase/scripts/review_line_detections.py --confirm <detection-id>
+python alma-sails-codebase/scripts/review_line_detections.py --reject <detection-id> \
+    --note "noise spike, blend_id=2"
+
+# Bulk-reject everything below a threshold (--dry-run to preview)
+python alma-sails-codebase/scripts/review_line_detections.py \
+    --reject-below 3.0 --dry-run
+```
+
+---
+
+### `audit_mous_disk_state.py` — Python
+
+Full MOUS-level audit: cross-checks every MOUS's `pipeline_state` against what actually exists on disk. Flags cases where the database claims `selfcal_complete` but the corrected MS files are missing.
+
+```bash
+python alma-sails-codebase/scripts/audit_mous_disk_state.py
+```
+
+---
+
+### `audit_continuum_products.py` — Python
+
+Cross-checks every imaging unit against files on disk for both robust 0.5 and robust 2.0 continuum products. Shows which units still need imaging and can print ready-to-run `casa` commands.
+
+```bash
+python alma-sails-codebase/scripts/audit_continuum_products.py
+python alma-sails-codebase/scripts/audit_continuum_products.py --ready-only
+python alma-sails-codebase/scripts/audit_continuum_products.py --launch-cmds
+```
 
 ---
 

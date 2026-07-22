@@ -4,13 +4,13 @@
 
 ## Quick summary
 
-From the project root:
+Query the database directly for an overview of pipeline state:
 
 ```bash
-python pipeline_status.py
+sqlite3 db/<survey>.db \
+  "SELECT current_state, COUNT(*) AS n FROM pipeline_state
+   GROUP BY current_state ORDER BY n DESC;"
 ```
-
-This prints a count of MOUSes at each FSM state, plus summaries for imaging units and line-processing units. It is the fastest way to see where the survey stands.
 
 ---
 
@@ -65,11 +65,17 @@ LIMIT 20;
 
 ## Disk usage
 
+Check how much space each MOUS's data is consuming at the OS level:
+
 ```bash
-python disk_usage_summary.py
+du -sh datasets/uid___A001_*/
 ```
 
-This groups disk usage by pipeline state (downloaded, split, selfcal) and reports total sizes. Useful for identifying which MOUSes are consuming the most space and whether completed stages can be cleaned up.
+For a per-state summary, query which MOUSes are at each state and cross-reference with `du` on their directories. The `audit_mous_disk_state.py` script does this automatically and highlights any DB/disk mismatches.
+
+```bash
+python alma-sails-codebase/scripts/audit_mous_disk_state.py
+```
 
 ---
 

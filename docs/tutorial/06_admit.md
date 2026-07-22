@@ -69,20 +69,20 @@ This step runs in a CASA environment (ADMIT is imported via a path inserted onto
 After ADMIT runs, review its detections before proceeding to deep imaging:
 
 ```bash
-python review_line_detections.py
+python alma-sails-codebase/scripts/review_line_detections.py
 ```
 
 This interactive tool lists all pending detections, shows the peak S/N and frequency, and lets you confirm or reject each one:
 
 ```bash
 # Confirm a detection by its ID
-python review_line_detections.py --confirm <detection-id>
+python alma-sails-codebase/scripts/review_line_detections.py --confirm <detection-id>
 
 # Reject a false positive
-python review_line_detections.py --reject <detection-id>
+python alma-sails-codebase/scripts/review_line_detections.py --reject <detection-id>
 
 # List all pending detections
-python review_line_detections.py --list
+python alma-sails-codebase/scripts/review_line_detections.py --list
 ```
 
 Only `confirmed` detections are eligible for deep line imaging. Rejected detections remain in the database for audit purposes.
