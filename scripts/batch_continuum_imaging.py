@@ -108,6 +108,8 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Print plan without running tclean")
     parser.add_argument("--keep-casa-products", action="store_true",
                         help="Keep CASA-format intermediates after FITS export (default: delete them)")
+    parser.add_argument("--exclude", nargs="+", metavar="TARGET", default=[],
+                        help="Target names to exclude from selection (e.g. --exclude S68Nc EC_53)")
     parser.add_argument("--db-path", default=str(DB_PATH), help="Path to serpens_v2.db")
     args = parser.parse_args()
 
@@ -125,11 +127,15 @@ def main() -> None:
         if not any(e.get("robust") == args.robust for e in existing):
             eligible_complete.append(u)
 
-    candidates = [u for u in list(all_ready) + eligible_complete if u["config_type"] != "tp"]
+    candidates = [u for u in list(all_ready) + eligible_complete
+                  if u["config_type"] != "tp" and u["target_name"] not in args.exclude]
 
     if not candidates:
         print(f"No imaging units available (ready or complete without robust={args.robust}).")
         return
+
+    if args.exclude:
+        print(f"Excluding: {', '.join(args.exclude)}")
 
     # Random selection
     n = min(args.count, len(candidates))
