@@ -1,0 +1,76 @@
+site_name: ALMA-SAILS Pipeline
+site_url: https://samdf96.github.io/alma-sails-codebase/
+repo_url: https://github.com/samdf96/alma-sails-codebase
+repo_name: samdf96/alma-sails-codebase
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: deep purple
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: deep purple
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - content.code.annotate
+    - search.highlight
+    - search.suggest
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Tutorial:
+    - Overview: tutorial/index.md
+    - "1. Download": tutorial/01_download.md
+    - "2. Split": tutorial/02_split.md
+    - "3. Self-calibration": tutorial/03_selfcal.md
+    - "4. Continuum Imaging": tutorial/04_imaging.md
+    - "5. Line Triage": tutorial/05_line_triage.md
+    - "6. Line Identification": tutorial/06_admit.md
+    - "7. Deep Line Imaging": tutorial/07_line_imaging.md
+  - How-To Guides:
+    - Check Pipeline Status: how-to/status.md
+    - Recovery Procedures: how-to/recovery.md
+  - Reference:
+    - Script Reference: reference/scripts.md
+    - Database Schema: reference/database.md
+    - Pipeline States: reference/states.md
