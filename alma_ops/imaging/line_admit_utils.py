@@ -161,17 +161,33 @@ def purge_incube_copy(projdir) -> bool:
     return deleted
 
 
-def purge_triage_cube_if_reviewed(conn, line_admit_unit_id: int) -> bool:
-    """Delete the original triage FITS cube once every detection tied to
-    this line_admit_unit has a non-'pending' review_status. Unlike
+def purge_triage_cube_if_reviewed(
+    conn, line_admit_unit_id: int, include_confirmed: bool = False
+) -> bool:
+    """Delete the original triage FITS cube for one line_admit_unit. Unlike
     purge_incube_copy, this is NOT called automatically by the main run --
     it touches the actual source data (not a duplicate), so it's invoked
     explicitly, e.g. from scripts/review_line_detections.py after review.
+
+    Never purges a SPW that still has any 'pending' detections, regardless
+    of mode. Operates on the specified SPW only -- other SPWs for the same
+    source may still be pending without blocking this call.
+
+    Parameters
+    ----------
+    include_confirmed:
+        False (default): only purge if every detection is 'rejected' (none
+        confirmed, none pending). Safe default -- reclaims disk only for SPWs
+        where ADMIT found nothing real.
+        True: purge if all detections are non-pending (confirmed or rejected).
+        Use when you want to clear a fully-reviewed SPW regardless of outcome.
 
     Returns True if the cube was deleted.
     """
     detections = db.get_line_admit_detections(conn, line_admit_unit_id)
     if not detections or any(d["review_status"] == "pending" for d in detections):
+        return False
+    if not include_confirmed and any(d["review_status"] == "confirmed" for d in detections):
         return False
 
     admit_state = db.get_line_admit_pipeline_state(conn, line_admit_unit_id)

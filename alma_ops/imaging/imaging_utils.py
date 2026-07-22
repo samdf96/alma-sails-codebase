@@ -508,6 +508,24 @@ def run_continuum_imaging(
         print(f"  [cont.dat] {_Path(cont_dat_path).parent.name}", flush=True)
         cont_ranges = parse_cont_dat(cont_dat_path, source_field_name)
 
+        if not cont_ranges and field_ids:
+            # source_field_name is the overarching mosaic source name (e.g.
+            # 'Serpens_Main_and_Serpens_South') while the cont.dat uses individual
+            # pointing names (e.g. 'SMSS_17'). All mosaic fields share the same
+            # spectral setup, so use the first available field's ranges.
+            import re as _re
+            _text = _Path(cont_dat_path).read_text()
+            _m = _re.search(r"(?im)^Field:\s*(.+)", _text)
+            if _m:
+                _fallback = _m.group(1).strip()
+                cont_ranges = parse_cont_dat(cont_dat_path, _fallback)
+                if cont_ranges:
+                    print(
+                        f"  [WARNING] Field '{source_field_name}' not in cont.dat; "
+                        f"using '{_fallback}' (same spectral setup).",
+                        flush=True,
+                    )
+
         if not cont_ranges:
             print(
                 f"  [WARNING] No cont.dat entries for field '{source_field_name}' in "

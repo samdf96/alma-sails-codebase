@@ -75,7 +75,7 @@ def get_connection(db_path: str | Path | None = None) -> sqlite3.Connection:
     if db_path is None:
         from alma_ops.config import DB_PATH
         db_path = DB_PATH
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=60)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn

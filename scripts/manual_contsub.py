@@ -98,11 +98,13 @@ def _remap_cont_dat_if_needed(cont_dat: Path, mous_dir: Path) -> bool:
     """
     pair = _find_listobs_pair(mous_dir)
     if pair is None:
-        print(f"[contsub] ERROR: Could not find a matching listobs pair in {mous_dir}")
-        print(f"          Expected files named <asdm>.ms.listobs.txt and")
-        print(f"          <asdm>_targets.ms.listobs.txt in the MOUS directory.")
-        print(f"          Please place both listobs files there and re-run.")
-        sys.exit(1)
+        # No raw-vs-targets listobs pair available (e.g. MOUS was re-split from
+        # already-split MSes, so no raw ASDM listobs were generated).  Skip
+        # remapping — the cont.dat SPW IDs are assumed to already match the
+        # split MSes (e.g. it was hand-placed after the split step).
+        print(f"[contsub] WARNING: No raw/targets listobs pair found in {mous_dir} "
+              f"— skipping SPW ID remapping. Assuming cont.dat SPW IDs match split MSes.")
+        return False
 
     raw_listobs, targets_listobs = pair
     print(f"[contsub] Using listobs pair:")
@@ -207,8 +209,23 @@ def main(mous_id: str, db_path: Path) -> None:
         sys.exit(1)
 
     corrected_mses = sorted(autoselfcal_dir.glob("*_targets.corrected.ms"))
+    using_plain_ms = False
     if not corrected_mses:
-        print(f"[ERROR] No *_targets.corrected.ms found in {autoselfcal_dir}")
+        # SC_success=False path: selfcal did not converge, no CORRECTED_DATA was
+        # extracted.  Fall back to the plain _targets.ms files — their DATA column
+        # is the pipeline-calibrated visibilities, which is identical in layout to
+        # the DATA column in a .corrected.ms (both are fed to uvcontsub with
+        # datacolumn="data").
+        corrected_mses = sorted(
+            p for p in autoselfcal_dir.glob("*_targets.ms")
+            if not p.name.endswith(".contsub.ms")
+        )
+        if corrected_mses:
+            print(f"[contsub] No *_targets.corrected.ms found — using *_targets.ms "
+                  f"(SC_success=False; applying contsub to pipeline-calibrated DATA column)")
+            using_plain_ms = True
+    if not corrected_mses:
+        print(f"[ERROR] No *_targets.corrected.ms or *_targets.ms found in {autoselfcal_dir}")
         sys.exit(1)
 
     # ------------------------------------------------------------------
@@ -237,7 +254,10 @@ def main(mous_id: str, db_path: Path) -> None:
     contsub_products = []
 
     for corrected_ms in corrected_mses:
-        out_name = corrected_ms.name.replace("_targets.corrected.ms", "_targets.contsub.ms")
+        if using_plain_ms:
+            out_name = corrected_ms.name.replace("_targets.ms", "_targets.contsub.ms")
+        else:
+            out_name = corrected_ms.name.replace("_targets.corrected.ms", "_targets.contsub.ms")
         out_ms   = autoselfcal_dir / out_name
 
         print(f"[contsub] Input  : {corrected_ms.name}")
