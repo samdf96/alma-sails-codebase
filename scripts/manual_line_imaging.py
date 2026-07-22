@@ -39,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from alma_ops import db
 from alma_ops.config import DB_PATH, LINE_FINAL_DIR
+from alma_ops.imaging.species_shorthand import species_label
 from alma_ops.utils import to_dir_mous_id
 
 
@@ -85,7 +86,8 @@ def main() -> None:
     species_name = detection["species_name"]
 
     print(f"[line-imaging] detection_id={args.detection_id}  "
-          f"species={species_name}  frequency={detection['frequency_ghz']:.4f} GHz")
+          f"species={species_label(species_name, detection['formula'])}  "
+          f"frequency={detection['frequency_ghz']:.4f} GHz")
     print(f"  mous_id   : {inputs['mous_id']}")
     print(f"  target    : {inputs['target_name']}  spw={inputs['spw_idx']}")
     print(f"  ms_paths  : {inputs['ms_paths']}")

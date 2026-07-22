@@ -66,6 +66,7 @@ from alma_ops.imaging.line_imaging_config import (
     LINE_IMAGING_PAD_FRACTION,
     TCLEAN_LINE_IMAGING_SHARED,
 )
+from alma_ops.imaging.species_shorthand import shorthand_for
 
 C_KMS = 299_792.458  # speed of light, km/s
 
@@ -215,8 +216,14 @@ def build_img_base(
     write to) and reset_line_imaging.py (to know what to delete without
     depending on imaging_products, which may not exist yet after a crash).
     Trailing det{detection_id} guarantees uniqueness even if two "Unknown"
-    lines round to the same frequency in the same spw."""
+    lines round to the same frequency in the same spw. Folds in the curated
+    shorthand (species_shorthand.shorthand_for) alongside the full species
+    slug when one exists, since the full descriptive name alone (e.g.
+    "Cyclopropenylidene") is slower to scan on disk than its formula."""
     species_slug = re.sub(r"[^A-Za-z0-9]+", "_", (species_name or "Unknown")).strip("_")
+    shorthand = shorthand_for(species_name)
+    if shorthand:
+        species_slug += "_" + re.sub(r"[^A-Za-z0-9]+", "_", shorthand).strip("_")
     return os.path.join(
         str(imaging_dir),
         f"{target_name}_{mous_dir_id}_spw{spw_idx}_{species_slug}_{frequency_ghz:.4f}GHz_det{detection_id}",
