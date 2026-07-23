@@ -19,11 +19,6 @@ Throughout the pages that follow, we use these placeholder names. Substitute you
 
 All scripts are run from `<project-root>`. The codebase lives at `<project-root>/alma-sails-codebase/`.
 
-!!! tip "Serpens quick reference"
-    For the Serpens survey, `<project-root>` is the `ALMA-SAILS/` directory,
-    the database is `db/serpens_v2.db`, and sources are named things like
-    `EC_53`, `Per-emb-2`, `Ser-emb-1`.
-
 ---
 
 ## Two ways to run each pipeline stage
@@ -34,7 +29,7 @@ Almost every pipeline stage can be invoked in one of two ways:
 : Run the processing script directly inside any CASA 6 environment (a container, a local CASA installation, or a cloud VM). This is the portable path and the one demonstrated most throughout this tutorial.
 
 **Automated — Prefect + CANFAR**
-: Trigger a Prefect flow, which submits a CANFAR headless session. The session runs the same underlying script and writes results back to the database. This is how the Serpens survey runs in production.
+: Trigger a Prefect flow, which submits a CANFAR headless session. The session runs the same underlying script and writes results back to the database.
 
 Both paths read from and write to the same SQLite database. You can mix them freely — using Prefect for routine bulk runs but falling back to manual scripts when debugging a specific MOUS.
 

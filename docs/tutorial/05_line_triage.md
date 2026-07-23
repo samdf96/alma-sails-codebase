@@ -16,7 +16,7 @@ Before imaging, the script classifies each SPW as a line candidate or continuum-
 
 SPWs that pass both tests are imaged as dirty cubes using the continuum-subtracted MS (`selfcal_products_sub`). The channel width is binned to a practical velocity resolution, with a floor set to avoid smearing broad emission lines.
 
-Each cube gets its own row in the `line_triage_unit` table, which tracks its FSM state independently.
+Each cube gets its own row in the `line_triage_unit` table, which tracks its pipeline state independently.
 
 ---
 

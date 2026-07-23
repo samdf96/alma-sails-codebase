@@ -7,7 +7,7 @@
 
 ## What this step does
 
-Continuum imaging deconvolves the calibrated visibilities to produce a primary-beam-corrected FITS image of the dust continuum emission. The pipeline uses CASA's `tclean` with auto-multithresh masking, followed by `impbcor` for primary beam correction and `exportfits` to produce science-ready FITS files.
+Continuum imaging deconvolves the calibrated visibilities to produce a primary-beam-corrected FITS image of the dust continuum emission. The pipeline uses CASA's `tclean` with auto-multithresh masking, followed by `impbcor` for primary beam correction and `exportfits` to produce science-ready FITS files. For a breakdown of auto-multithresh parameters by dataset type, see the [CASA Automasking Guide](https://casaguides.nrao.edu/index.php/Automasking_Guide_CASA_6.5.4).
 
 One imaging unit groups all observations of the same source in the same band and configuration type — so if two separate MOUSes both observed `<source>` in Band 6 with 12m arrays, they are imaged together in one `tclean` call.
 

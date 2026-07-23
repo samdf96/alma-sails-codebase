@@ -7,7 +7,7 @@
 
 ## What this step does
 
-The pipeline downloads the calibrated Measurement Set from the ALMA Science Data Products (SRDP) archive. SRDP provides a URL pointing to a tarball containing the calibrated MS and associated products (weblogs, QA2 reports). The script retrieves this tarball, extracts it, and records the on-disk location in the database.
+The pipeline downloads the calibrated Measurement Set from the [ALMA Science Ready Data Products (SRDP)](https://science.nrao.edu/srdp/) service. SRDP provides a URL from which the calibrated MS and associated products (weblogs, QA2 reports) are retrieved and recorded in the database.
 
 After this step, the MOUS directory exists under `datasets/<mous-id>/` and contains the raw calibrated data ready for splitting.
 
@@ -18,7 +18,7 @@ After this step, the MOUS directory exists under `datasets/<mous-id>/` and conta
 - The MOUS UID (e.g., `uid://A001/X1234/X5678`)
 - The SRDP download URL for that MOUS
 
-The SRDP URL can be found from the ALMA archive's data products page for your project. It typically looks like `https://almascience.nrao.edu/dataPortal/...`.
+The SRDP URL is retrieved from your submitted jobs on the SRDP portal.
 
 ---
 
@@ -44,7 +44,7 @@ The SRDP URL can be found from the ALMA archive's data products page for your pr
     The script will:
 
     1. Confirm the MOUS is in `pending` state
-    2. Download and extract the tarball
+    2. Retrieve the data from the SRDP URL
     3. Write the `mous_directory` path to the database
     4. Transition the MOUS to `downloaded`
 

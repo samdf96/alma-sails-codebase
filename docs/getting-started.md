@@ -11,7 +11,7 @@ This page covers what you need before running any pipeline stage.
 | Tool | Version | Used for |
 |---|---|---|
 | Python | ≥ 3.8 | All scripts |
-| [CASA](https://casa.nrao.edu) | 6.x | Split, selfcal, imaging scripts |
+| [CASA](https://casa.nrao.edu) | 6.5.4.9 (pipeline) | Split, selfcal, imaging scripts |
 | SQLite | any | Inspecting the database |
 
 CASA includes its own Python interpreter. Scripts that call CASA tasks (`split`, `tclean`, etc.) must be run with `casa -c script.py`, not with your system Python. Scripts that only interact with the database and filesystem can run under any Python ≥ 3.8.
@@ -33,10 +33,10 @@ The pipeline expects a specific layout. The codebase repository sits inside a pr
 ```
 project-root/
 ├── alma-sails-codebase/        # This repository (pipeline code)
-├── auto_selfcal/               # PHANGS auto_selfcal checkout
+├── auto_selfcal/               # auto_selfcal checkout
 ├── admit/                      # ADMIT line-identification toolkit
 ├── db/
-│   └── serpens_v2.db           # Central SQLite database
+│   └── <survey>.db             # Central SQLite database
 ├── datasets/                   # One subdirectory per MOUS
 │   └── uid___A001_.../
 │       ├── splits/             # Split measurement sets
@@ -56,10 +56,10 @@ Scripts are always run from the **project root**, not from inside the codebase d
 
 ## The database
 
-All pipeline state lives in `db/serpens_v2.db`. This is the single source of truth — you can always query it to find out what has been processed and what hasn't.
+All pipeline state lives in `db/<survey>.db`. This is the single source of truth — you can always query it to find out what has been processed and what hasn't.
 
 ```bash
-sqlite3 db/serpens_v2.db
+sqlite3 db/<survey>.db
 ```
 
 Useful first queries:
@@ -77,31 +77,18 @@ SELECT mous_id, from_state, to_state, at FROM state_transitions
 ORDER BY at DESC LIMIT 20;
 ```
 
-!!! tip
-    The database stores paths in canonical form (e.g. `/arc/projects/...`). On your local
-    machine, translate these to your actual project root when reading them. The pipeline
-    library handles this automatically — you only need to worry about it if you are writing
-    raw SQL queries.
+!!! tip "Canonical paths"
+    The database stores paths in canonical form (e.g. `/arc/projects/...`) because this
+    pipeline was developed for the CANFAR platform, where storage is mounted at a fixed
+    canonical prefix. On your local machine, translate these to your actual project root
+    when reading them. The pipeline library handles this automatically — you only need to
+    worry about it if you are writing raw SQL queries.
 
 ---
 
 ## Seeding the database
 
-If you are starting a new survey (not the Serpens project), you will need to populate the database from ALMA archive metadata. See `scripts/seed_database.py` for the seeding workflow.
-
-For the Serpens survey, the database is already seeded and committed. You can skip this step.
-
----
-
-## Checking overall status
-
-From the project root:
-
-```bash
-python pipeline_status.py
-```
-
-This prints a count of MOUSes at each FSM state, plus counts for imaging and line-processing units.
+If you are starting a new survey, the database is initially seeded from the normalized output of the [ALMiner](https://github.com/emerge-erc/ALminer) package, which queries the ALMA archive and produces a structured table of MOUS metadata. See `scripts/seed_database.py` for the seeding workflow.
 
 ---
 

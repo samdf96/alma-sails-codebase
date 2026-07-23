@@ -16,7 +16,7 @@ Each detected line is written to the `line_admit_detection` table with:
 - Channel range
 - A blend flag if multiple lines overlap
 
-Detections start with `review_status = 'pending'` and must be reviewed by a human before they can be promoted to deep line imaging. This is intentional — automated line finders produce false positives, especially near bright continuum artefacts.
+Detections start with `review_status = 'pending'` and must be reviewed visually before they can be promoted to deep line imaging. This is intentional — automated line finders produce false positives, especially near bright continuum artefacts.
 
 !!! warning "VLSR is required"
     ADMIT's built-in source velocity lookup only covers its own demo sources. For real

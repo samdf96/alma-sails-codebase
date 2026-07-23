@@ -7,7 +7,7 @@
 
 ## What this step does
 
-The calibrated MS downloaded from SRDP contains all fields observed during the scheduling block — calibrators, check sources, and science targets — and all spectral windows in their native channel widths. The split step produces a compact, target-only MS containing only the science fields and the spectral windows needed for imaging.
+As is typical for any downloaded MS from either the ALMA Science Archive (ASA) or the SRDP service, the MS will contain all fields observed during the scheduling block — calibrators, check sources, and science targets — and all spectral windows in their native channel widths. The split step produces a compact, target-only MS containing only the science fields and the spectral windows needed for imaging.
 
 This reduces the data volume significantly (calibrator fields alone can double the file size) and is a prerequisite for self-calibration.
 

@@ -9,9 +9,7 @@
 
 Self-calibration uses the science data itself to derive and apply additional phase (and optionally amplitude) corrections beyond what the observatory's pipeline calibration provided. It typically improves image dynamic range and reduces artefacts near bright compact sources — both common in protostellar continuum data.
 
-The pipeline uses **auto\_selfcal**, a PHANGS-derived script that automates the decision logic: it iterates over solution intervals, applies successive phase correction rounds, and stops when the improvement plateaus.
-
-Self-calibration is the most compute-intensive step. Plan for 30 minutes to several hours depending on the MS size and number of fields.
+The pipeline uses **auto\_selfcal** (from [jjtobin/auto_selfcal](https://github.com/jjtobin/auto_selfcal)), which automates the decision logic: it iterates over solution intervals, applies successive phase correction rounds, and stops when the improvement plateaus.
 
 ---
 
@@ -32,16 +30,25 @@ This step requires CASA (with MPI support for parallel execution).
     1. Copies the split MSes into `datasets/<mous-id>/auto_selfcal/`
     2. Runs `mpicasa` for `findcont` (identifies continuum channels)
     3. Runs `mpicasa` for the selfcal loop (phase → amplitude rounds as warranted)
-    4. Extracts `CORRECTED_DATA` from each MS into new, compact MSes
+    4. Splits out only the `CORRECTED_DATA` column into new, compact MSes to save disk space; if no corrected data is found the original data are kept instead
     5. Removes intermediate working data to free disk space
     6. Records selfcal products and transitions to `selfcal_complete`
 
-    !!! tip "MPI parallelism"
-        `manual_selfcal.sh` calls `mpicasa` internally. To control the number of MPI
-        processes, set `MPICASA_NPROC` before running:
-        ```bash
-        MPICASA_NPROC=8 bash alma-sails-codebase/scripts/manual_selfcal.sh --mous-id <mous-id>
-        ```
+    To control the number of MPI processes, pass `--ncores`:
+
+    ```bash
+    bash alma-sails-codebase/scripts/manual_selfcal.sh --mous-id <mous-id> [--ncores 8]
+    ```
+
+    Pass `--ncores 0` to skip `mpicasa` entirely and run plain `casa -c` instead.
+
+    !!! tip "Pre-populated cont.dat"
+        If you already have a `cont.dat` file (from a previous run or manual inspection),
+        create the `datasets/<mous-id>/auto_selfcal/` directory and place `cont.dat`
+        inside it before running. The script detects the existing file and skips the
+        `findcont` step, proceeding directly to the selfcal iterations. This can save a
+        significant amount of time, since `findcont` is the most computationally expensive
+        part of the workflow.
 
 === "Prefect (CANFAR)"
 
@@ -92,7 +99,7 @@ Expected: `current_state = selfcal_complete`, `selfcal_products` is a non-empty 
 If selfcal is killed or fails, the MOUS may be stuck in `selfcal_running` or `failed`. Use the reset script to restore it to `split_complete`:
 
 ```bash
-casa --nologger \
+casa [--nologger] \
     -c alma-sails-codebase/scripts/reset_selfcal.py \
     --mous-id <mous-id>
 ```

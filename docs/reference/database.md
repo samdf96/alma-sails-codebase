@@ -6,6 +6,62 @@ All pipeline state is stored in a single SQLite database at `db/<survey>.db`.
 
 ---
 
+## Table overview
+
+The database is organized into six natural groups. Each processing stage has its own state, audit, and log tables; the core survey tables are static after seeding.
+
+```mermaid
+graph TD
+  subgraph Static ["Core Survey (static)"]
+    mous["mous"]
+    targets["targets"]
+  end
+
+  subgraph MousFSM ["MOUS Pipeline"]
+    pipeline_state["pipeline_state"]
+    state_transitions["state_transitions"]
+    run_log["run_log"]
+  end
+
+  subgraph ContImaging ["Continuum Imaging"]
+    imaging_unit["imaging_unit"]
+    mous_imaging_unit["mous_imaging_unit\n(junction)"]
+    imaging_pipeline_state["imaging_pipeline_state\n+ state_transitions + run_log"]
+  end
+
+  subgraph LTriage ["Line Triage"]
+    line_triage_unit["line_triage_unit"]
+    line_triage_ps["line_triage_pipeline_state\n+ state_transitions + run_log"]
+  end
+
+  subgraph LAdmit ["Line Identification"]
+    line_admit_unit["line_admit_unit"]
+    line_admit_detection["line_admit_detection"]
+    line_admit_ps["line_admit_pipeline_state\n+ state_transitions + run_log"]
+  end
+
+  subgraph LImaging ["Deep Line Imaging"]
+    line_imaging_unit["line_imaging_unit"]
+    line_imaging_ps["line_imaging_pipeline_state\n+ state_transitions + run_log"]
+  end
+
+  mous --> pipeline_state
+  mous --> targets
+  mous --> mous_imaging_unit
+  mous_imaging_unit --> imaging_unit
+  imaging_unit --> imaging_pipeline_state
+
+  mous --> line_triage_unit
+  line_triage_unit --> line_triage_ps
+  line_triage_unit --> line_admit_unit
+  line_admit_unit --> line_admit_detection
+  line_admit_unit --> line_admit_ps
+  line_admit_detection --> line_imaging_unit
+  line_imaging_unit --> line_imaging_ps
+```
+
+---
+
 ## Core survey tables (static after seeding)
 
 ### `mous`
@@ -202,4 +258,4 @@ Standard tables keyed on `line_imaging_unit_id`.
 
 ## Path conventions
 
-All paths stored in the database use the **canonical prefix** (e.g., `/arc/projects/ALMA-SAILS/`), not the local filesystem path. The `alma_ops.db` helper functions translate paths automatically when reading from or writing to the database. If you are writing raw SQL, apply `to_local()` after reading and `to_canonical()` before writing.
+All paths stored in the database use the **canonical prefix** (e.g., `/arc/projects/ALMA-SAILS/`), not the local filesystem path. This convention exists because the pipeline was developed for the CANFAR platform, where project storage is mounted at a fixed canonical path regardless of which node or container is running. The `alma_ops.db` helper functions translate paths automatically when reading from or writing to the database. If you are writing raw SQL, apply `to_local()` after reading and `to_canonical()` before writing.

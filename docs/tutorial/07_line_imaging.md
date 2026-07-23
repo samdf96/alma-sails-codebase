@@ -20,7 +20,7 @@ Each confirmed detection gets exactly one `line_imaging_unit`. If you want to re
 Line imaging requires the detection to be confirmed. If you have not done so yet:
 
 ```bash
-python review_line_detections.py --confirm <detection-id>
+python alma-sails-codebase/scripts/review_line_detections.py --confirm <detection-id>
 ```
 
 Find the detection ID:
@@ -108,6 +108,7 @@ python alma-sails-codebase/scripts/reset_line_imaging.py \
 
 This removes the partial products and resets the unit to `ready`.
 
+<!--
 ---
 
 ## What comes next
@@ -117,3 +118,4 @@ With fully-cleaned continuum and line images in hand, the data are ready for sci
 - **Spectral decomposition** — fitting line profiles with SCOUSE to identify kinematic structures
 - **Moment maps** — zeroth, first, and second moment images of the detected lines
 - **Multi-configuration combination** — if the source was observed in both 12m and 7m configurations, combining them improves sensitivity to extended emission
+-->

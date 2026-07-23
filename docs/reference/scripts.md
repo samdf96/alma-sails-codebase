@@ -25,7 +25,7 @@ Advances: `pending → downloaded`
 Split calibrated MS to target-only spectral windows.
 
 ```bash
-casa --nologger --nologfile \
+casa [--nologger] [--nologfile] \
     -c alma-sails-codebase/scripts/manual_split.py \
     --mous-id <mous-id>
 ```
@@ -42,7 +42,7 @@ Run the full auto_selfcal workflow: prep → findcont → selfcal loops → extr
 bash alma-sails-codebase/scripts/manual_selfcal.sh --mous-id <mous-id>
 ```
 
-Optional: `MPICASA_NPROC=8` environment variable to set MPI process count.
+Optional: `--ncores N` (default 4) to set MPI process count; `--ncores 0` for plain `casa` without MPI.
 
 Advances: `split_complete → selfcal_complete`
 
@@ -63,7 +63,7 @@ python alma-sails-codebase/scripts/reset_download.py --mous-id <mous-id>
 Reset a killed or failed selfcal back to `split_complete`.
 
 ```bash
-casa --nologger \
+casa [--nologger] \
     -c alma-sails-codebase/scripts/reset_selfcal.py \
     --mous-id <mous-id>
 ```
@@ -79,7 +79,7 @@ Removes `CORRECTED_DATA`, cleans `auto_selfcal/`, moves MSes back to `splits/`.
 Image a single `(source, band, config)` imaging unit.
 
 ```bash
-casa --nologger --nologfile \
+casa [--nologger] [--nologfile] \
     -c alma-sails-codebase/scripts/manual_continuum_imaging.py \
     --source <source> --band <band> --config <config> \
     [--robust 0.5] [--dry-run] [--keep-casa-products]
@@ -94,7 +94,7 @@ Advances: imaging `ready → complete`
 Randomly select and image N ready units sequentially.
 
 ```bash
-casa --nologger --nologfile \
+casa [--nologger] [--nologfile] \
     -c alma-sails-codebase/scripts/batch_continuum_imaging.py \
     --count <N> \
     [--robust 0.5] \
@@ -125,7 +125,7 @@ A unit becomes `ready` when all of its contributing MOUSes are `selfcal_complete
 Classify SPWs and produce dirty line-triage cubes.
 
 ```bash
-casa --nologger --nologfile \
+casa [--nologger] [--nologfile] \
     -c alma-sails-codebase/scripts/manual_line_triage_imaging.py \
     --mous-id <mous-id> --source <source> \
     [--spw <spw-index>] \
@@ -153,7 +153,7 @@ python alma-sails-codebase/scripts/reset_line_triage.py \
 Run ADMIT line identification on a completed triage cube.
 
 ```bash
-casa --nologger --nologfile \
+casa [--nologger] [--nologfile] \
     -c alma-sails-codebase/scripts/manual_admit_lineid.py \
     --mous-id <mous-id> --source <source> --spw <spw-index> \
     [--force] [--dry-run]
@@ -181,7 +181,7 @@ Deletes the ADMIT project directory and resets to `ready`.
 Deep-clean a confirmed line detection.
 
 ```bash
-casa --nologger --nologfile \
+casa [--nologger] [--nologfile] \
     -c alma-sails-codebase/scripts/manual_line_imaging.py \
     --detection-id <detection-id> \
     [--robust 0.5] [--ncores 1] [--force] [--dry-run] [--keep-casa-products]
