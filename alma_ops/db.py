@@ -75,7 +75,7 @@ def get_connection(db_path: str | Path | None = None) -> sqlite3.Connection:
     if db_path is None:
         from alma_ops.config import DB_PATH
         db_path = DB_PATH
-    conn = sqlite3.connect(str(db_path), timeout=60)
+    conn = sqlite3.connect(str(db_path), timeout=300)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
@@ -856,7 +856,7 @@ def record_line_admit_transition(
         )
         transition_id = cur.lastrowid
 
-        conn.execute(
+        cur2 = conn.execute(
             """
             UPDATE line_admit_pipeline_state
             SET current_state=?, updated_at=?, last_transition_id=?
@@ -864,6 +864,11 @@ def record_line_admit_transition(
             """,
             (to_state, now, transition_id, line_admit_unit_id),
         )
+        if cur2.rowcount == 0:
+            raise RuntimeError(
+                f"record_line_admit_transition: no line_admit_pipeline_state row "
+                f"for line_admit_unit_id={line_admit_unit_id} — orphaned unit"
+            )
 
         if admit_products is not None:
             conn.execute(
@@ -916,7 +921,7 @@ def record_line_admit_failure(
         )
         transition_id = cur.lastrowid
 
-        conn.execute(
+        cur2 = conn.execute(
             """
             UPDATE line_admit_pipeline_state
             SET current_state='failed', updated_at=?, last_transition_id=?,
@@ -925,6 +930,11 @@ def record_line_admit_failure(
             """,
             (now, transition_id, line_admit_unit_id),
         )
+        if cur2.rowcount == 0:
+            raise RuntimeError(
+                f"record_line_admit_failure: no line_admit_pipeline_state row "
+                f"for line_admit_unit_id={line_admit_unit_id} — orphaned unit"
+            )
 
         conn.execute(
             """

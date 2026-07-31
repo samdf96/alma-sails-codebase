@@ -136,7 +136,22 @@ def main() -> None:
           f"line candidates: {line_spws})")
 
     if not line_spws:
-        print("[OK] No line-candidate spws — nothing to do.")
+        unit_id = db.get_or_create_line_triage_unit(conn, args.mous_id, args.source, -1)
+        sentinel_state = db.get_line_triage_pipeline_state(conn, unit_id)["current_state"]
+        if sentinel_state == "complete" and not args.force:
+            print("[OK] No line-candidate spws — already recorded as continuum-only.")
+        else:
+            print("[OK] No line-candidate spws (all continuum) — recording sentinel.")
+            db.record_line_triage_transition(
+                conn, unit_id,
+                from_state=sentinel_state, to_state="complete",
+                run_id=str(uuid.uuid4()),
+                note="no line-candidate spws — all continuum",
+                step="complete",
+                triage_products={"continuum_only": True,
+                                 "completed_at": datetime.now(timezone.utc).isoformat()},
+                payload={"note": "no line-candidate spws", "classification": classification},
+            )
         conn.close()
         return
 

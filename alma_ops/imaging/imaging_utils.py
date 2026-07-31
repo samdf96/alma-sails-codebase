@@ -481,12 +481,24 @@ def run_continuum_imaging(
     # (tclean, impbcor, exportfits) is co-located with the image products.
     _log_name = f"{field_name}_B{band}_{config_type}_rob{robust:.1f}.casa.log"
     _log_path = os.path.join(imaging_dir, _log_name)
-    try:
-        import casatools as _casatools
-        _casatools.casalog.setlogfile(_log_path)
-        print(f"  [log] redirected to {_log_path}", flush=True)
-    except (ImportError, AttributeError, Exception):
-        pass
+    # casalog is a CASA global injected into __main__; access it from there rather
+    # than via `import casatools`, which may not give the same initialised singleton.
+    import sys as _sys
+    _casalog = getattr(_sys.modules.get("__main__"), "casalog", None)
+    if _casalog is None:
+        try:
+            import casatools as _ct
+            _casalog = getattr(_ct, "casalog", None)
+        except ImportError:
+            pass
+    if _casalog is not None:
+        try:
+            _casalog.setlogfile(_log_path)
+            print(f"  [log] CASA log → {_log_path}", flush=True)
+        except Exception as _e:
+            print(f"  [WARNING] casalog.setlogfile({_log_path!r}) failed: {type(_e).__name__}: {_e}", flush=True)
+    else:
+        print(f"  [WARNING] casalog not found; CASA log will not be redirected to {_log_path}", flush=True)
 
     from alma_ops.imaging.cont_dat_utils import cont_dat_to_spw_string, parse_cont_dat
     from alma_ops.imaging.continuum_config import TCLEAN_SHARED, select_automask

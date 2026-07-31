@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -38,8 +39,21 @@ def _pbcor_fits(target: str, band: str, config: str, robust: float) -> Path:
     return _imaging_dir(target, band, config) / fname
 
 
-def _check_on_disk(target: str, band: str, config: str, robust: float) -> bool:
-    return _pbcor_fits(target, band, config, robust).is_file()
+def _build_fits_index(root: Path) -> set:
+    """Single directory walk to collect all FITS paths under root."""
+    existing = set()
+    if not root.is_dir():
+        return existing
+    for dirpath, _, fnames in os.walk(root):
+        for fname in fnames:
+            if fname.endswith(".fits"):
+                existing.add(Path(dirpath) / fname)
+    return existing
+
+
+def _check_on_disk(target: str, band: str, config: str, robust: float,
+                   existing: set) -> bool:
+    return _pbcor_fits(target, band, config, robust) in existing
 
 
 def _robustness_from_products(products_json: str | None) -> set:
@@ -74,6 +88,8 @@ def main() -> None:
     """).fetchall()
     conn.close()
 
+    existing = _build_fits_index(CONTINUUM_IMAGING_DIR)
+
     results = []
     for r in rows:
         target = r["target_name"]
@@ -82,8 +98,8 @@ def main() -> None:
         state  = r["current_state"]
 
         db_robustness = _robustness_from_products(r["imaging_products"])
-        disk_05 = _check_on_disk(target, band, config, 0.5)
-        disk_20 = _check_on_disk(target, band, config, 2.0)
+        disk_05 = _check_on_disk(target, band, config, 0.5, existing)
+        disk_20 = _check_on_disk(target, band, config, 2.0, existing)
 
         results.append({
             "target": target, "band": band, "config": config, "state": state,

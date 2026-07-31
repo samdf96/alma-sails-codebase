@@ -308,12 +308,22 @@ def run_line_imaging(
     )
 
     _log_path = img_base + ".casa.log"
-    try:
-        import casatools as _casatools
-        _casatools.casalog.setlogfile(_log_path)
-        print(f"  [log] redirected to {_log_path}", flush=True)
-    except (ImportError, AttributeError, Exception):
-        pass
+    import sys as _sys
+    _casalog = getattr(_sys.modules.get("__main__"), "casalog", None)
+    if _casalog is None:
+        try:
+            import casatools as _ct
+            _casalog = getattr(_ct, "casalog", None)
+        except ImportError:
+            pass
+    if _casalog is not None:
+        try:
+            _casalog.setlogfile(_log_path)
+            print(f"  [log] CASA log → {_log_path}", flush=True)
+        except Exception as _e:
+            print(f"  [WARNING] casalog.setlogfile({_log_path!r}) failed: {type(_e).__name__}: {_e}", flush=True)
+    else:
+        print(f"  [WARNING] casalog not found; CASA log will not be redirected to {_log_path}", flush=True)
 
     print("  [params] computing B75 …", flush=True)
     b75 = compute_b75(ms_paths)

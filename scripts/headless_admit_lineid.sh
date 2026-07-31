@@ -32,6 +32,10 @@ if [ "$FORCE" = "1" ]; then
     EXTRA_ARGS+=(--force)
 fi
 
+# cd into a container-local temp dir so CASA's makemask temp directories
+# (__tmp_frominmask_*) are isolated per-session and don't collide on /arc
+cd "$(mktemp -d)"
+
 casa --nologger --nogui \
     -c "${CODEBASE_DIR}/scripts/manual_admit_lineid.py" \
     --mous-id "${MOUS_ID}" \
