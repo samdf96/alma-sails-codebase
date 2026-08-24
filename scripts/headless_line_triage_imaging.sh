@@ -19,6 +19,9 @@ SOURCE="$2"
 DB_PATH="$3"
 LINEWIDTH_FLOOR_KMS="${4:-}"
 SPW_OVERRIDE="${5:-}"
+# "0" is the sentinel meaning "no spw override" (batch_line_triage.py uses it so that
+# $6/FORCE is not swallowed by shell word-splitting when SPW_OVERRIDE is absent).
+[ "$SPW_OVERRIDE" = "0" ] && SPW_OVERRIDE=""
 FORCE="${6:-}"
 
 CODEBASE_DIR="/arc/projects/ALMA-SAILS/alma-sails-codebase"

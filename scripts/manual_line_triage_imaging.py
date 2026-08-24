@@ -198,7 +198,6 @@ def main() -> None:
                 ms_paths=ms_paths,
                 imaging_dir=str(img_dir),
                 bin_factor=bin_info["bin_factor"],
-                nchan=bin_info["nchan"],
                 is_mosaic=is_mosaic,
                 keep_casa_products=args.keep_casa_products,
             )
