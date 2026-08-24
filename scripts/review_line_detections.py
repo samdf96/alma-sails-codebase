@@ -18,6 +18,9 @@ lines appear first.
 
 Usage:
     python3 review_line_detections.py                          # list all pending
+    python3 review_line_detections.py --limit 20               # show only the top 20 by peakrms
+    python3 review_line_detections.py --peakrms-min 5.0        # only detections >= 5 sigma
+    python3 review_line_detections.py --peakrms-min 3.0 --peakrms-max 10.0  # 3–10 sigma window
     python3 review_line_detections.py --mous-id uid://... --source EC_53 --spw 3
     python3 review_line_detections.py --confirm 42 [--note "..."]
     python3 review_line_detections.py --reject 43 --note "riding on stronger neighbor, blend_id=1"
@@ -46,22 +49,77 @@ from alma_ops import db
 from alma_ops.config import DB_PATH
 from alma_ops.imaging.species_shorthand import shorthand_for
 
-SEP = "-" * 120
+SEP = "-" * 165
 
 
 def _print_detections(rows) -> None:
     if not rows:
         print("  (none)")
         return
-    print(f"  {'id':>5} {'mous_id':22} {'source':13} {'spw':>3} {'species':20} {'shorthand':11} "
-          f"{'freq(GHz)':>10} {'peakrms':>9} {'blend':>6} {'status':10}")
+    print(f"  {'id':>5} {'mous_id':22} {'source':20} {'spw':>3} {'species':20} {'shorthand':11} "
+          f"{'transition':24} {'freq(GHz)':>10} {'vel(km/s)':>9} {'peakrms':>9} {'chan range':>14} "
+          f"{'blend':>6} {'status':10}")
     print("  " + SEP)
     for r in rows:
         species = r['species_name'] or r['formula'] or ''
         shorthand = shorthand_for(r['species_name'], r['frequency_ghz']) or ''
-        print(f"  {r['line_admit_detection_id']:>5} {r['mous_id']:22.22} {r['target_name']:13.13} {r['spw_idx']:>3} "
+        transition = str(r['transition'] or '')
+        vel = r['velocity_kms']
+        vel_str = f"{vel:9.2f}" if vel is not None else f"{'—':>9}"
+        sc, ec = r['startchan'], r['endchan']
+        chan_str = f"{sc}-{ec}" if sc is not None and ec is not None else "—"
+        print(f"  {r['line_admit_detection_id']:>5} {r['mous_id']:22.22} {r['target_name']:20.20} {r['spw_idx']:>3} "
               f"{species:20.20} {shorthand:11.11} "
-              f"{r['frequency_ghz']:>10.4f} {r['peakrms_sigma']:>9.2f} {r['blend_id']:>6} {r['review_status']:10}")
+              f"{transition:24.24} {r['frequency_ghz']:>10.4f} {vel_str} {r['peakrms_sigma']:>9.2f} "
+              f"{chan_str:>14} {r['blend_id']:>6} {r['review_status']:10}")
+
+
+def _sort_by_chanrange(rows):
+    """Within each (mous, source, spw), cluster detections by overlapping channel ranges.
+
+    Units are ordered by their strongest detection. Within each unit, clusters appear
+    in startchan order, strongest-first within each cluster. Detections with no channel
+    info are treated as their own cluster.
+    """
+    units: dict = {}
+    for r in rows:
+        key = (r["mous_id"], r["target_name"], r["spw_idx"])
+        units.setdefault(key, []).append(r)
+
+    sorted_rows = []
+    unit_keys = sorted(units, key=lambda k: max(r["peakrms_sigma"] for r in units[k]), reverse=True)
+
+    for key in unit_keys:
+        unit_rows = sorted(units[key], key=lambda r: (r["startchan"] if r["startchan"] is not None else 0))
+
+        clusters: list = []
+        cur_cluster: list = []
+        cur_end: int | None = None
+
+        for r in unit_rows:
+            sc, ec = r["startchan"], r["endchan"]
+            if sc is None or ec is None:
+                if cur_cluster:
+                    clusters.append(cur_cluster)
+                    cur_cluster = []
+                    cur_end = None
+                clusters.append([r])
+                continue
+            if cur_end is None or sc <= cur_end + 1:
+                cur_cluster.append(r)
+                cur_end = max(cur_end, ec) if cur_end is not None else ec
+            else:
+                clusters.append(cur_cluster)
+                cur_cluster = [r]
+                cur_end = ec
+        if cur_cluster:
+            clusters.append(cur_cluster)
+
+        for cluster in clusters:
+            cluster.sort(key=lambda r: r["peakrms_sigma"], reverse=True)
+            sorted_rows.extend(cluster)
+
+    return sorted_rows
 
 
 def _rows_with_unit_info(conn, detections):
@@ -95,6 +153,20 @@ def main() -> None:
                          help="Delete the triage cube for --mous-id/--source/--spw if every detection is rejected")
     parser.add_argument("--include-confirmed", action="store_true",
                          help="With --purge-triage-cube: also purge SPWs where some detections were confirmed")
+    parser.add_argument("--species", default=None,
+                         help="Filter by shorthand species name, case-insensitive, transition stripped "
+                              "(e.g. HC3N matches HC3N(12-11); HCO+ matches HCO+(3-2) and DCO+(3-2) "
+                              "won't match HCO+ — use DCO+ for that)")
+    parser.add_argument("--peakrms-min", type=float, default=None, metavar="SIGMA",
+                         help="Only show detections with peakrms_sigma >= SIGMA")
+    parser.add_argument("--peakrms-max", type=float, default=None, metavar="SIGMA",
+                         help="Only show detections with peakrms_sigma <= SIGMA")
+    parser.add_argument("--limit", type=int, default=None, metavar="N",
+                         help="Show only the top N detections by peakrms_sigma (strongest first)")
+    parser.add_argument("--sort", default="sigma", choices=["sigma", "chanrange"],
+                         help="Sort order: 'sigma' (default, strongest first) or 'chanrange' "
+                              "(grouped by overlapping channel ranges within each SPW unit, "
+                              "units ordered by strongest detection)")
     parser.add_argument("--db-path", default=str(DB_PATH))
     args = parser.parse_args()
 
@@ -130,10 +202,10 @@ def main() -> None:
         _print_detections(to_reject)
         if not args.dry_run:
             for r in to_reject:
-                db.update_detection_review(
-                    conn, r["line_admit_detection_id"], "rejected",
-                    f"auto-rejected: peakrms_sigma={r['peakrms_sigma']:.2f} < threshold {args.reject_below}",
-                )
+                note = f"auto-rejected: peakrms_sigma={r['peakrms_sigma']:.2f} < threshold {args.reject_below}"
+                if args.note:
+                    note += f"; {args.note}"
+                db.update_detection_review(conn, r["line_admit_detection_id"], "rejected", note)
             print(f"[OK] {len(to_reject)} detection(s) rejected.")
         conn.close()
         return
@@ -181,12 +253,34 @@ def main() -> None:
         rows = [r for r in rows if r["target_name"] == args.source]
     if args.spw is not None:
         rows = [r for r in rows if r["spw_idx"] == args.spw]
+    if args.species is not None:
+        target = args.species.split("(")[0].upper()
+        rows = [r for r in rows if (shorthand_for(r["species_name"], r["frequency_ghz"]) or "").split("(")[0].upper() == target]
 
-    rows.sort(key=lambda r: r["peakrms_sigma"], reverse=True)
+    if args.peakrms_min is not None:
+        rows = [r for r in rows if r["peakrms_sigma"] >= args.peakrms_min]
+    if args.peakrms_max is not None:
+        rows = [r for r in rows if r["peakrms_sigma"] <= args.peakrms_max]
+
+    if args.sort == "chanrange":
+        rows = _sort_by_chanrange(rows)
+    else:
+        rows.sort(key=lambda r: r["peakrms_sigma"], reverse=True)
 
     conn.close()
 
-    print(f"Detections (status={args.status}, n={len(rows)}):")
+    total = len(rows)
+    if args.limit is not None:
+        rows = rows[:args.limit]
+    label = f"n={total}" if args.limit is None else f"showing {len(rows)} of {total}"
+    range_tag = ""
+    if args.peakrms_min is not None and args.peakrms_max is not None:
+        range_tag = f", peakrms={args.peakrms_min}–{args.peakrms_max}σ"
+    elif args.peakrms_min is not None:
+        range_tag = f", peakrms>={args.peakrms_min}σ"
+    elif args.peakrms_max is not None:
+        range_tag = f", peakrms<={args.peakrms_max}σ"
+    print(f"Detections (status={args.status}, {label}{range_tag}, sort={args.sort}):")
     _print_detections(rows)
 
 
