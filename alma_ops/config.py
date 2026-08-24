@@ -19,6 +19,7 @@ CONTINUUM_IMAGING_DIR  = PROJECT_ROOT / "imaging" / "continuum"
 LINE_IMAGING_DIR       = PROJECT_ROOT / "imaging" / "lines"
 LINE_TRIAGE_DIR        = LINE_IMAGING_DIR / "triage"
 LINE_FINAL_DIR         = LINE_IMAGING_DIR / "final"
+SCOUSE_DIR             = LINE_IMAGING_DIR / "scouse"
 SRDP_WEBLOG_DIR        = PROJECT_ROOT / "SRDP_weblogs"
 
 # Container images
