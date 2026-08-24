@@ -27,6 +27,7 @@ import contextlib
 import io
 import json
 import re
+import shutil
 import sys
 import uuid
 from datetime import datetime
@@ -49,7 +50,7 @@ _PARALLEL_RAM_GB = 16  # default RAM when ncores > 1 and ram_gb not specified
 
 @task(name="validate-imaging-ready")
 def validate_imaging_ready(
-    source: str, band: str, config: str, robust: float, db_path: str
+    source: str, band: str, config: str, robust: float, db_path: str, force: bool = False
 ) -> tuple:
     """Verify the imaging unit is runnable. Returns (imaging_unit_id, current_state)."""
     logger = get_run_logger()
@@ -62,13 +63,14 @@ def validate_imaging_ready(
 
     imaging_unit_id = unit["imaging_unit_id"]
     ips = db.get_imaging_pipeline_state(conn, imaging_unit_id)
-    conn.close()
 
     if ips is None:
+        conn.close()
         raise ValueError(f"No imaging_pipeline_state row for imaging_unit_id={imaging_unit_id}")
 
     state = ips["current_state"]
     if state not in ("ready", "complete", "failed"):
+        conn.close()
         raise ValueError(
             f"Cannot run imaging: unit is in state '{state}' for {source} B{band} {config} — "
             f"expected 'ready', 'complete', or 'failed'"
@@ -77,13 +79,26 @@ def validate_imaging_ready(
     existing_products = json.loads(ips["imaging_products"] or "[]")
     if isinstance(existing_products, dict):
         existing_products = [existing_products]
-    if any(e.get("robust") == robust for e in existing_products):
-        raise ValueError(
-            f"Products for robust={robust} already exist for {source} B{band} {config} — "
-            f"remove the entry from imaging_products in the DB to re-image."
-        )
+    matching = [e for e in existing_products if e.get("robust") == robust]
+    if matching:
+        if not force:
+            conn.close()
+            raise ValueError(
+                f"Products for robust={robust} already exist for {source} B{band} {config} — "
+                f"pass force=True to overwrite."
+            )
+        for entry in matching:
+            for key in ("image_pbcor_fits", "image_fits", "image_pbcor", "image"):
+                path = entry.get(key)
+                if path:
+                    p = Path(db.to_local(path))
+                    if p.exists():
+                        shutil.rmtree(str(p)) if p.is_dir() else p.unlink()
+        db.remove_imaging_products_entry(conn, imaging_unit_id, robust)
+        logger.info(f"[{source} B{band} {config}] force=True: removed existing products for robust={robust}")
 
-    logger.info(f"[{source} B{band} {config}] State '{state}', no existing products for robust={robust}")
+    conn.close()
+    logger.info(f"[{source} B{band} {config}] State '{state}', proceeding with robust={robust}")
     return imaging_unit_id, state
 
 
@@ -135,13 +150,15 @@ def build_imaging_payload(
             "field_ids":         field_ids,
         })
 
-        # Match on source_field_name (the actual MS field name) when set,
-        # since for a field-id-subset imaging unit alma_source_name is the
-        # shared mosaic name, not the canonical target_name (source).
+        # Always look up is_mosaic via the imaging unit's own target_name.
+        # source_field_name is the parent MOUS's MS field name (e.g.
+        # "Serpens_Main_and_Serpens_South") — inheriting its mosaic flag would
+        # incorrectly mark a single extracted field as a mosaic and cause
+        # compute_mosaic_imaging_params to span the full parent footprint.
         target_row = next(
             (
                 r for r in db.get_mous_targets(conn, mous_id)
-                if r["alma_source_name"] == (source_field_name or source)
+                if r["alma_source_name"] == source
             ),
             None,
         )
@@ -296,6 +313,7 @@ def imaging_unit_flow(
     robust: float = 0.5,
     ncores: Optional[int] = None,
     ram_gb: Optional[int] = None,
+    force: bool = False,
     use_staging: bool = False,
     db_path: Optional[str] = None,
 ) -> None:
@@ -318,6 +336,8 @@ def imaging_unit_flow(
     ram_gb:
         RAM in GB. Only used when ncores is not None. Defaults to 16 GB when
         ncores > 1 and not specified.
+    force:
+        If True, delete existing products for the given robust value and re-image.
     use_staging:
         If True, submit to the CANFAR staging cluster.
     db_path:
@@ -327,7 +347,7 @@ def imaging_unit_flow(
     db_path = db_path or str(DB_PATH)
     run_id  = str(uuid.uuid4())
 
-    imaging_unit_id, current_state = validate_imaging_ready(source, band, config, robust, db_path)
+    imaging_unit_id, current_state = validate_imaging_ready(source, band, config, robust, db_path, force)
     payload                        = build_imaging_payload(imaging_unit_id, source, band, config, robust, run_id, ncores, db_path)
     payload_path                   = write_payload_file(payload)
     mark_imaging_running(imaging_unit_id, current_state, run_id, db_path)
@@ -361,6 +381,7 @@ if __name__ == "__main__":
     parser.add_argument("--robust",     type=float, default=0.5,             help="Briggs robust (default 0.5)")
     parser.add_argument("--ncores",  type=int, default=None, help="CPU cores (omit for flexible mode; >1 enables parallel tclean)")
     parser.add_argument("--ram-gb",  type=int, default=None, help="RAM in GB (default 16 when ncores>1, ignored in flexible mode)")
+    parser.add_argument("--force",       action="store_true",                 help="Delete existing products and re-image")
     parser.add_argument("--db-path",    default=None,                        help="Path to serpens_v2.db")
     parser.add_argument("--use-staging", action="store_true",                help="Submit to CANFAR staging cluster")
     args = parser.parse_args()
@@ -372,6 +393,7 @@ if __name__ == "__main__":
         robust=args.robust,
         ncores=args.ncores,
         ram_gb=args.ram_gb,
+        force=args.force,
         db_path=args.db_path,
         use_staging=args.use_staging,
     )

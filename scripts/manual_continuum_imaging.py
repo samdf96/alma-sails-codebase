@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 import traceback
 import uuid
@@ -59,6 +60,8 @@ def main() -> None:
     parser.add_argument("--band",   required=True, help="Band number (e.g. '6', '7')")
     parser.add_argument("--config", required=True, help="Config type: 12m, 7m, tp, combined")
     parser.add_argument("--robust", type=float, default=0.5, help="Briggs robust (default 0.5)")
+    parser.add_argument("--force", action="store_true",
+                        help="Delete existing products for this robust value and re-image")
     parser.add_argument("--dry-run", action="store_true", help="Print plan without running tclean")
     parser.add_argument("--keep-casa-products", action="store_true",
                         help="Keep CASA-format intermediates after FITS export (default: delete them)")
@@ -93,18 +96,27 @@ def main() -> None:
         conn.close()
         sys.exit(1)
 
-    # Guard against re-running with an already-completed robust value
     existing_products = json.loads(ips["imaging_products"] or "[]")
     if isinstance(existing_products, dict):
         existing_products = [existing_products]
     already_done = [e for e in existing_products if e.get("robust") == args.robust]
     if already_done:
-        print(f"[ERROR] Products for robust={args.robust} already exist:")
-        for key in ("image_pbcor_fits", "image_pbcor", "image_fits", "image"):
-            print(f"  {key}: {already_done[0].get(key, 'n/a')}")
-        print("  Remove this entry from imaging_products in the DB and delete the files to re-image.")
-        conn.close()
-        sys.exit(1)
+        if not args.force:
+            print(f"[ERROR] Products for robust={args.robust} already exist:")
+            for key in ("image_pbcor_fits", "image_pbcor", "image_fits", "image"):
+                print(f"  {key}: {already_done[0].get(key, 'n/a')}")
+            print("  Pass --force to delete them and re-image.")
+            conn.close()
+            sys.exit(1)
+        for entry in already_done:
+            for key in ("image_pbcor_fits", "image_fits", "image_pbcor", "image"):
+                path = entry.get(key)
+                if path:
+                    p = Path(db.to_local(path))
+                    if p.exists():
+                        shutil.rmtree(str(p)) if p.is_dir() else p.unlink()
+                        print(f"[imaging] --force: removed {p.name}")
+        db.remove_imaging_products_entry(conn, imaging_unit_id, args.robust)
 
     # --- Collect contributing MOUSes and build mous_list ---
     mous_rows = db.get_mous_for_imaging_unit(conn, imaging_unit_id)
@@ -143,18 +155,16 @@ def main() -> None:
         conn.close()
         sys.exit(1)
 
-    # --- Mosaic detection: any contributing MOUS's target row marked as a
-    # mosaic means the field needs gridder='mosaic' and mosaic-aware sizing
-    # (see compute_mosaic_imaging_params — derived from the MS pointings
-    # actually being imaged, not from survey metadata). Match on
-    # source_field_name (the actual MS field name) when set, since for a
-    # field-id-subset imaging unit alma_source_name is the shared mosaic
-    # name, not the canonical target_name.
+    # Always look up is_mosaic via the imaging unit's own target_name (field_name).
+    # source_field_name is the parent MOUS's MS field name (e.g.
+    # "Serpens_Main_and_Serpens_South") — inheriting its mosaic flag would
+    # incorrectly mark a single extracted field as a mosaic and cause
+    # compute_mosaic_imaging_params to span the full parent footprint.
     is_mosaic = any(
         target_row["is_mosaic"] == "T"
         for entry in mous_list
         for target_row in db.get_mous_targets(conn, entry["mous_id"])
-        if target_row["alma_source_name"] == (entry["source_field_name"] or field_name)
+        if target_row["alma_source_name"] == field_name
     )
 
     img_dir = str(CONTINUUM_IMAGING_DIR / field_name / f"B{args.band}_{args.config}")

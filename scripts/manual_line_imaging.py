@@ -10,6 +10,8 @@ Run from a CANFAR c-casa container:
         --detection-id 2 \\
         [--robust 0.5] \\
         [--ncores 4] \\
+        [--pad-fraction 1.0] \\
+        [--pad-floor-kms 5.0] \\
         [--force] \\
         [--dry-run] \\
         [--keep-casa-products] \\
@@ -39,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from alma_ops import db
 from alma_ops.config import DB_PATH, LINE_FINAL_DIR
+from alma_ops.imaging.line_imaging_config import LINE_IMAGING_PAD_FLOOR_KMS, LINE_IMAGING_PAD_FRACTION
 from alma_ops.imaging.species_shorthand import species_label
 from alma_ops.utils import to_dir_mous_id
 
@@ -50,6 +53,12 @@ def main() -> None:
     parser.add_argument("--detection-id", type=int, required=True, help="line_admit_detection_id")
     parser.add_argument("--robust", type=float, default=0.5, help="Briggs robust weighting (default 0.5)")
     parser.add_argument("--ncores", type=int, default=0, help="mpicasa cores; 0 = flexible/single-threaded")
+    parser.add_argument("--pad-fraction", type=float, default=None,
+                        help="Padding per side as a multiple of measured linewidth "
+                             f"(default: {LINE_IMAGING_PAD_FRACTION}). Increase for blended/wide lines.")
+    parser.add_argument("--pad-floor-kms", type=float, default=None,
+                        help="Minimum per-side padding in km/s regardless of linewidth "
+                             f"(default: {LINE_IMAGING_PAD_FLOOR_KMS} km/s).")
     parser.add_argument("--force", action="store_true", help="Re-run even if already 'complete'")
     parser.add_argument("--dry-run", action="store_true", help="Print the plan without running tclean")
     parser.add_argument("--keep-casa-products", action="store_true", help="Keep CASA-format intermediates")
@@ -94,11 +103,15 @@ def main() -> None:
     print(f"  vlsr_kms  : {inputs['vlsr_kms']}")
     print(f"  is_mosaic : {inputs['is_mosaic']}")
 
+    pad_fraction  = args.pad_fraction  if args.pad_fraction  is not None else LINE_IMAGING_PAD_FRACTION
+    pad_floor_kms = args.pad_floor_kms if args.pad_floor_kms is not None else LINE_IMAGING_PAD_FLOOR_KMS
     window = compute_line_window(
         inputs["ms_paths"][0], inputs["spw_idx"], detection, inputs["vlsr_kms"], inputs["bin_factor"],
+        pad_fraction=pad_fraction, pad_floor_kms=pad_floor_kms,
     )
     print(f"  freq_peak_ghz : {window['freq_peak_ghz']:.6f}")
     print(f"  linewidth_kms : {window['linewidth_kms']:.3f}")
+    print(f"  pad_fraction  : {pad_fraction}  pad_floor_kms: {pad_floor_kms}")
     print(f"  window        : [{window['lo_ghz']:.6f}, {window['hi_ghz']:.6f}] GHz")
 
     imaging_dir = LINE_FINAL_DIR / inputs["target_name"]
@@ -162,7 +175,9 @@ def main() -> None:
         sys.exit(1)
 
     imaging_products = {
-        **result, "robust": args.robust, "completed_at": datetime.now(timezone.utc).isoformat(),
+        **result, "robust": args.robust,
+        "pad_fraction": pad_fraction, "pad_floor_kms": pad_floor_kms,
+        "completed_at": datetime.now(timezone.utc).isoformat(),
     }
     conn = db.get_connection(args.db_path)
     db.record_line_imaging_transition(

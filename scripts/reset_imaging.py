@@ -1,23 +1,25 @@
 """
 reset_imaging.py
 -----------------
-Recovery script for an imaging unit orphaned in 'running' with no activity
-logged -- the launching job crashed or was killed without ever calling
-record_imaging_failure(). Confirm via imaging_run_log that nothing is
-actually in flight before using this; it does not check CANFAR itself.
+Resets an imaging unit back to 'ready' so it can be re-imaged. Handles two cases:
 
-Resets the imaging unit to ready so it can be retried cleanly:
-  1. Delete partial tclean products (<field>_B<band>_<config>_rob*_cont.*)
+  1. Orphaned 'running' unit -- the launching job crashed or was killed without
+     calling record_imaging_failure(). Confirm via imaging_run_log that nothing
+     is actually in flight before using this; it does not check CANFAR itself.
+
+  2. Completed unit that needs to be re-imaged (e.g. centering fixes). Pass
+     --force since completed units always have run_log entries.
+
+Resets the imaging unit to ready:
+  1. Delete existing tclean products (<field>_B<band>_<config>_rob*_cont.*)
      left behind in imaging/continuum/<source>/B<band>_<config>/
-  2. Reset imaging_pipeline_state to 'ready' (contributing MOUSes are
-     already selfcal_complete, so it does not need to go back to 'pending')
+  2. Reset imaging_pipeline_state to 'ready'
 
-Refuses to act on a unit with imaging_run_log entries unless --force is
-given, since that means a job did report back and this may not be an
-orphan.
+Refuses to act on a unit with imaging_run_log entries unless --force is given.
 
 Usage:
     python alma-sails-codebase/scripts/reset_imaging.py --source Ser_S68N --band 3 --config 12m
+    python alma-sails-codebase/scripts/reset_imaging.py --source Ser_S68N --band 3 --config 12m --force
     python alma-sails-codebase/scripts/reset_imaging.py --source Ser_S68N --band 3 --config 12m --dry-run
 """
 
@@ -33,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from alma_ops import db
 from alma_ops.config import CONTINUUM_IMAGING_DIR, DB_PATH
 
-_RECOVERABLE_STATES = {"running"}
+_RECOVERABLE_STATES = {"running", "complete"}
 
 
 def main() -> None:
@@ -85,12 +87,13 @@ def main() -> None:
     for p in to_delete:
         shutil.rmtree(p) if p.is_dir() else p.unlink()
 
+    db.remove_imaging_products_entry(conn, unit["imaging_unit_id"])
     db.record_imaging_transition(
         conn,
         imaging_unit_id=unit["imaging_unit_id"],
-        from_state="running",
+        from_state=state["current_state"],
         to_state="ready",
-        note="reset: orphaned running state with no run_log activity; partial products cleaned",
+        note="reset: products cleaned for re-imaging",
         step="reset_imaging",
     )
     conn.close()

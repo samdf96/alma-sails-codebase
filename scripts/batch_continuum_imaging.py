@@ -83,13 +83,15 @@ def _build_mous_list(conn, imaging_unit_id: int) -> tuple:
             "field_ids":         field_ids,
         })
 
-        # Match on source_field_name (the actual MS field name) when set,
-        # since for a field-id-subset imaging unit alma_source_name is the
-        # shared mosaic name, not the canonical target_name (field_name).
+        # Always look up is_mosaic via the imaging unit's own target_name (field_name).
+        # source_field_name is the parent MOUS's MS field name (e.g.
+        # "Serpens_Main_and_Serpens_South") — inheriting its mosaic flag would
+        # incorrectly mark a single extracted field as a mosaic and cause
+        # compute_mosaic_imaging_params to span the full parent footprint.
         target_row = next(
             (
                 r for r in db.get_mous_targets(conn, mous_id)
-                if r["alma_source_name"] == (source_field_name or field_name)
+                if r["alma_source_name"] == field_name
             ),
             None,
         )

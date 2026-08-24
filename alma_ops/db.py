@@ -520,6 +520,36 @@ def record_imaging_transition(
     return transition_id
 
 
+def remove_imaging_products_entry(
+    conn: sqlite3.Connection,
+    imaging_unit_id: int,
+    robust: float | None = None,
+) -> None:
+    """Remove imaging_products entries for a unit.
+
+    If robust is given, only removes the entry matching that robust value.
+    If robust is None, clears all entries (sets imaging_products to NULL).
+    """
+    if robust is None:
+        conn.execute(
+            "UPDATE imaging_pipeline_state SET imaging_products=NULL WHERE imaging_unit_id=?",
+            (imaging_unit_id,),
+        )
+        return
+    row = conn.execute(
+        "SELECT imaging_products FROM imaging_pipeline_state WHERE imaging_unit_id=?",
+        (imaging_unit_id,),
+    ).fetchone()
+    existing = json.loads(row[0]) if row and row[0] else []
+    if isinstance(existing, dict):
+        existing = [existing]
+    filtered = [e for e in existing if e.get("robust") != robust]
+    conn.execute(
+        "UPDATE imaging_pipeline_state SET imaging_products=? WHERE imaging_unit_id=?",
+        (json.dumps(filtered) if filtered else None, imaging_unit_id),
+    )
+
+
 def record_imaging_failure(
     conn: sqlite3.Connection,
     imaging_unit_id: int,
