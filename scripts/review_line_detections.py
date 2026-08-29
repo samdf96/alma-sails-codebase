@@ -22,8 +22,19 @@ Usage:
     python3 review_line_detections.py --peakrms-min 5.0        # only detections >= 5 sigma
     python3 review_line_detections.py --peakrms-min 3.0 --peakrms-max 10.0  # 3–10 sigma window
     python3 review_line_detections.py --mous-id uid://... --source EC_53 --spw 3
+    python3 review_line_detections.py --det 2651 2682 2653          # list just these ids
+    python3 review_line_detections.py --det 2651,2682 --peakrms-min 6
+        # --det takes any number of ids, space- and/or comma-separated, and stacks
+        # with every other filter. It implies --status all (so a named id shows up
+        # whatever its review state) unless --status is passed explicitly. Ids that
+        # cannot be shown are reported with the reason.
     python3 review_line_detections.py --confirm 42 [--note "..."]
     python3 review_line_detections.py --reject 43 --note "riding on stronger neighbor, blend_id=1"
+    python3 review_line_detections.py --confirm 42 43 44          # several at once
+    python3 review_line_detections.py --reject 2680,2683,2691 --note "hyperfine of 2633"
+        # --confirm/--reject take any number of ids, space- and/or comma-separated.
+        # A --note applies to every id in the batch. Ids are all validated first,
+        # so a typo fails the whole call rather than half-applying it.
     python3 review_line_detections.py --reject-below 3.0 [--dry-run]
         # bulk-reject all pending detections below 3.0 sigma; combine with
         # --mous-id/--source/--spw to scope to a specific unit. --dry-run
@@ -123,10 +134,22 @@ def _sort_by_chanrange(rows):
 
 
 def _rows_with_unit_info(conn, detections):
-    """Join detections back to line_admit_pipeline_state for mous/source/spw."""
+    """Join detections back to line_admit_pipeline_state for mous/source/spw.
+
+    The unit table is read once into a dict rather than queried per detection:
+    the per-row version issued thousands of round-trips against a DB on network
+    storage, which dominated the runtime of every listing.
+    """
+    units = {
+        u["line_admit_unit_id"]: u
+        for u in conn.execute(
+            "SELECT line_admit_unit_id, mous_id, target_name, spw_idx "
+            "FROM line_admit_pipeline_state"
+        ).fetchall()
+    }
     out = []
     for d in detections:
-        unit = db.get_line_admit_pipeline_state(conn, d["line_admit_unit_id"])
+        unit = units[d["line_admit_unit_id"]]
         merged = dict(d)
         merged["mous_id"] = unit["mous_id"]
         merged["target_name"] = unit["target_name"]
@@ -135,16 +158,119 @@ def _rows_with_unit_info(conn, detections):
     return out
 
 
+def _parse_detection_ids(values) -> list[int]:
+    """Flatten space- and/or comma-separated detection ids into ints, order preserved.
+
+    Accepts "--confirm 1 2 3", "--confirm 1,2,3", and mixtures of the two.
+    Duplicates are collapsed so an id repeated on the command line is written once.
+    """
+    ids: list[int] = []
+    for value in values:
+        for piece in str(value).replace(",", " ").split():
+            try:
+                parsed = int(piece)
+            except ValueError:
+                print(f"[ERROR] Not a valid detection id: {piece!r}")
+                sys.exit(1)
+            if parsed not in ids:
+                ids.append(parsed)
+    if not ids:
+        print("[ERROR] No detection ids given.")
+        sys.exit(1)
+    return ids
+
+
+def _warn_missing_dets(conn, wanted: list[int], rows, status: str) -> None:
+    """Explain any --det id that will not appear in the listing.
+
+    Silence would be ambiguous here: a missing id could be a typo, a detection
+    filtered out by --status, or one excluded by --species/--peakrms/etc. Each
+    needs a different fix, so say which it is.
+    """
+    shown = {r["line_admit_detection_id"] for r in rows}
+    missing = [d for d in wanted if d not in shown]
+    if not missing:
+        return
+
+    absent, wrong_status, filtered = [], [], []
+    for det_id in missing:
+        row = db.get_line_admit_detection(conn, det_id)
+        if row is None:
+            absent.append(det_id)
+        elif status != "all" and row["review_status"] != status:
+            wrong_status.append((det_id, row["review_status"]))
+        else:
+            filtered.append(det_id)
+
+    if absent:
+        print(f"[WARN] no detection with id: {', '.join(str(d) for d in absent)}")
+    for det_id, actual in wrong_status:
+        print(f"[WARN] detection {det_id} is '{actual}', excluded by --status {status} "
+              f"(use --status all to see it)")
+    if filtered:
+        print(f"[WARN] excluded by the other filters: "
+              f"{', '.join(str(d) for d in filtered)}")
+
+
+def _apply_review(conn, values, review_status: str, note: str | None) -> None:
+    """Set review_status on one or more detections, sharing a single note.
+
+    Every id is validated before anything is written: a typo in one id would
+    otherwise leave the batch half-applied, which is worse to unpick than an
+    outright failure.
+    """
+    ids = _parse_detection_ids(values)
+
+    rows, missing = {}, []
+    for det_id in ids:
+        row = db.get_line_admit_detection(conn, det_id)
+        if row is None:
+            missing.append(det_id)
+        else:
+            rows[det_id] = row
+    if missing:
+        print(f"[ERROR] No detection with id: {', '.join(str(m) for m in missing)}")
+        print("        Nothing was written -- fix the id(s) and re-run.")
+        sys.exit(1)
+
+    changed = unchanged = 0
+    for det_id in ids:
+        row = rows[det_id]
+        was = row["review_status"]
+        shorthand = shorthand_for(row["species_name"], row["frequency_ghz"]) or row["formula"] or "?"
+        if was == review_status:
+            print(f"  [SKIP] {det_id:>6}  {shorthand:<16} already {review_status}")
+            unchanged += 1
+            continue
+        db.update_detection_review(conn, det_id, review_status, note)
+        print(f"  [OK]   {det_id:>6}  {shorthand:<16} {was} → {review_status}")
+        changed += 1
+
+    summary = f"[OK] {changed} detection(s) → {review_status}"
+    if unchanged:
+        summary += f"; {unchanged} already {review_status}"
+    print(summary)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="List and review ADMIT line detections.")
     parser.add_argument("--mous-id", default=None)
     parser.add_argument("--source", default=None, help="Target/field name")
     parser.add_argument("--spw", type=int, default=None)
-    parser.add_argument("--status", default="pending", choices=["pending", "confirmed", "rejected", "all"],
-                         help="Filter by review_status when listing (default: pending)")
-    parser.add_argument("--confirm", type=int, default=None, metavar="DETECTION_ID")
-    parser.add_argument("--reject", type=int, default=None, metavar="DETECTION_ID")
-    parser.add_argument("--note", default=None, help="Optional note for --confirm/--reject")
+    parser.add_argument("--status", default=None, choices=["pending", "confirmed", "rejected", "all"],
+                         help="Filter by review_status when listing (default: pending, "
+                              "or 'all' when --det names specific ids)")
+    parser.add_argument("--det", nargs="+", default=None, metavar="DETECTION_ID",
+                         help="List only these detection ids, space- and/or comma-separated. "
+                              "Combines with every other filter. Implies --status all unless "
+                              "--status is given explicitly, so named ids show up whatever "
+                              "their review state.")
+    parser.add_argument("--confirm", nargs="+", default=None, metavar="DETECTION_ID",
+                         help="One or more detection ids, space- and/or comma-separated")
+    parser.add_argument("--reject", nargs="+", default=None, metavar="DETECTION_ID",
+                         help="One or more detection ids, space- and/or comma-separated")
+    parser.add_argument("--note", default=None,
+                         help="Optional note for --confirm/--reject; applied to every id given")
     parser.add_argument("--reject-below", type=float, default=None, metavar="SIGMA",
                          help="Bulk-reject all pending detections with peakrms_sigma below SIGMA")
     parser.add_argument("--dry-run", action="store_true",
@@ -173,14 +299,12 @@ def main() -> None:
     conn = db.get_connection(args.db_path)
 
     if args.confirm is not None:
-        db.update_detection_review(conn, args.confirm, "confirmed", args.note)
-        print(f"[OK] detection {args.confirm} → confirmed")
+        _apply_review(conn, args.confirm, "confirmed", args.note)
         conn.close()
         return
 
     if args.reject is not None:
-        db.update_detection_review(conn, args.reject, "rejected", args.note)
-        print(f"[OK] detection {args.reject} → rejected")
+        _apply_review(conn, args.reject, "rejected", args.note)
         conn.close()
         return
 
@@ -241,12 +365,24 @@ def main() -> None:
         conn.close()
         return
 
+    # A named id should be visible whatever its review state, so --det flips the
+    # default to 'all'. An explicit --status still wins.
+    if args.status is None:
+        args.status = "all" if args.det else "pending"
+
     status = None if args.status == "all" else args.status
     detections = db.get_line_admit_detections(conn, review_status=status)
 
     # mous_id/source/spw aren't columns on line_admit_detection itself, so
     # filtering on them happens after joining to the parent unit below.
+    wanted = None
+    if args.det is not None:
+        wanted = _parse_detection_ids(args.det)
+        detections = [d for d in detections
+                      if d["line_admit_detection_id"] in wanted]
+
     rows = _rows_with_unit_info(conn, detections)
+
     if args.mous_id:
         rows = [r for r in rows if r["mous_id"] == args.mous_id]
     if args.source:
@@ -261,6 +397,9 @@ def main() -> None:
         rows = [r for r in rows if r["peakrms_sigma"] >= args.peakrms_min]
     if args.peakrms_max is not None:
         rows = [r for r in rows if r["peakrms_sigma"] <= args.peakrms_max]
+
+    if wanted is not None:
+        _warn_missing_dets(conn, wanted, rows, args.status)
 
     if args.sort == "chanrange":
         rows = _sort_by_chanrange(rows)
