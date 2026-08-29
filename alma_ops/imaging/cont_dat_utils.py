@@ -124,7 +124,54 @@ def parse_cont_dat(
     return result
 
 
-def cont_dat_to_spw_string(ms_path, cont_ranges: dict) -> str:
+def chanfreqs_in_frame(ms_path, spw_idx: int, frame: str, field=None):
+    """Channel frequencies of one SPW, expressed in `frame` (e.g. "LSRK").
+
+    msmetadata.chanfreqs() returns frequencies in the measurement set's own
+    frame -- TOPO for ALMA -- so it cannot be compared against LSRK-quoted
+    values directly. ms.cvelfreqs() applies CASA's own conversion.
+
+    Raises on failure rather than falling back to the native frame: a silent
+    fallback here is precisely what produced empty cubes for months (see
+    BLANK_CUBES_REPORT.md), because the wrong answer looks like a valid one.
+    """
+    import casatools
+
+    mstool = casatools.ms()
+    mstool.open(str(ms_path))
+    try:
+        kwargs = dict(spwids=[int(spw_idx)], mode="channel", outframe=frame)
+        if field is not None:
+            msmd = casatools.msmetadata()
+            msmd.open(str(ms_path))
+            try:
+                fids = [int(f) for f in msmd.fieldsforname(str(field))]
+            finally:
+                msmd.done()
+            if fids:
+                kwargs["fieldids"] = fids[:1]
+        freqs = mstool.cvelfreqs(**kwargs)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Could not convert SPW {spw_idx} of {ms_path} to frame {frame!r}: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+    finally:
+        mstool.close()
+
+    import numpy as np
+
+    freqs = np.asarray(freqs, dtype=float)
+    if freqs.size == 0:
+        raise RuntimeError(
+            f"cvelfreqs returned no channels for SPW {spw_idx} of {ms_path} "
+            f"in frame {frame!r}"
+        )
+    return freqs
+
+
+def cont_dat_to_spw_string(ms_path, cont_ranges: dict, ranges_frame: str | None = None,
+                           field=None) -> str:
     """Convert parsed cont.dat ranges to a CASA SPW:channel selection string.
 
     Must be called from inside a CASA session (uses casatools.msmetadata).
@@ -135,6 +182,22 @@ def cont_dat_to_spw_string(ms_path, cont_ranges: dict) -> str:
         Path to the measurement set.
     cont_ranges:
         Output of parse_cont_dat: {spw_idx: [(lo_ghz, hi_ghz)...] or 'ALL'}.
+    ranges_frame:
+        Reference frame the frequencies in `cont_ranges` are quoted in, e.g.
+        "LSRK". Channel frequencies are converted into this frame before
+        comparison. cont.dat quotes its ranges in LSRK, and compute_line_window
+        returns LSRK, so callers should pass "LSRK".
+
+        None keeps the old behaviour of comparing against the measurement set's
+        native frame with no conversion. That is only correct when the caller's
+        frequencies really are native, and it is what caused the empty-cube bug:
+        LSRK values were compared against TOPO channels, selecting channels
+        offset by 31-70 MHz. Windows narrower than that offset selected data
+        that fell entirely outside the requested image. See BLANK_CUBES_REPORT.md.
+    field:
+        Field name whose direction is used for the frame conversion. Recommended
+        whenever ranges_frame is set; the conversion depends on where the source
+        sits on the sky.
 
     Returns
     -------
@@ -163,7 +226,11 @@ def cont_dat_to_spw_string(ms_path, cont_ranges: dict) -> str:
             if spw_idx >= n_spw:
                 continue
 
-            chan_freqs_hz = msmd.chanfreqs(spw_idx)
+            if ranges_frame:
+                chan_freqs_hz = chanfreqs_in_frame(
+                    ms_path, spw_idx, ranges_frame, field=field)
+            else:
+                chan_freqs_hz = msmd.chanfreqs(spw_idx)
             n_chan = len(chan_freqs_hz)
 
             if ranges == _ALL:

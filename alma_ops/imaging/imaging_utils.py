@@ -547,7 +547,12 @@ def run_continuum_imaging(
             continue
 
         for ms_path in ms_paths:
-            spw_str = cont_dat_to_spw_string(ms_path, cont_ranges)
+            # cont.dat quotes its ranges in LSRK (see the "GHz LSRK" suffix in the
+            # files); MS channel frequencies are TOPO. Convert before comparing.
+            spw_str = cont_dat_to_spw_string(
+                ms_path, cont_ranges,
+                ranges_frame="LSRK", field=source_field_name,
+            )
             if not spw_str:
                 print(f"  [WARNING] Empty SPW selection for {ms_path} — skipping.", flush=True)
                 continue

@@ -25,6 +25,11 @@ from __future__ import annotations
 LINE_IMAGING_PAD_FRACTION: float = 1.0   # per side, as a multiple of measured linewidth
 LINE_IMAGING_PAD_FLOOR_KMS: float = 5.0  # minimum per-side padding regardless of measured width
 
+# Warn when more than this fraction of a finished cube's channels gridded no
+# data. 100% blank is always a hard failure; a smaller fraction usually means
+# the frequency window only partly overlaps the selected data.
+BLANK_CHANNEL_WARN_FRAC: float = 0.10
+
 # tclean parameters shared by all deep line-imaging jobs. Not included here
 # (computed or supplied per job): vis, spw, imagename, field, imsize, cell,
 # start, width, nchan, restfreq, robust, phasecenter (mosaic only), parallel.
@@ -43,4 +48,18 @@ TCLEAN_LINE_IMAGING_SHARED: dict = {
     "usemask":     "auto-multithresh",
     "interactive": False,
     "savemodel":   "none",
+
+    # One beam for the whole cube instead of CASA's default per-channel beam.
+    # A varying beam is what spectral_cube's VaryingResolutionSpectralCube
+    # refuses to average over: real cubes here showed ~6% channel-to-channel
+    # variation against its 1% default tolerance, which blocked scousepy's
+    # moment maps until the threshold was relaxed by hand. These are final
+    # science cubes feeding kinematic decomposition, so fix it at the source.
+    "restoringbeam": "common",
+
+    # Pinned rather than left to the CASA default (currently True). Correct for
+    # Briggs-weighted cubes -- weight density is computed per channel instead of
+    # over the collapsed cube, which keeps the beam and noise stable across the
+    # band. Explicit so a CASA version bump cannot silently change final products.
+    "perchanweightdensity": True,
 }

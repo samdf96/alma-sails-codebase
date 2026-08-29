@@ -37,6 +37,7 @@ import argparse
 
 from alma_ops import db
 from alma_ops.config import DB_PATH, LINE_FINAL_DIR
+from alma_ops.imaging.continuum_config import DEFAULT_ROBUST
 from alma_ops.imaging.line_imaging_utils import build_img_base
 from alma_ops.utils import to_dir_mous_id
 
@@ -48,7 +49,7 @@ _CASA_SUFFIXES = [
 ]
 
 
-def main(detection_id: int, db_path: Path) -> None:
+def main(detection_id: int, db_path: Path, robust: float = DEFAULT_ROBUST) -> None:
     conn = db.get_connection(db_path)
 
     detection = db.get_line_admit_detection(conn, detection_id)
@@ -66,20 +67,22 @@ def main(detection_id: int, db_path: Path) -> None:
 
     mous_id = unit_row["mous_id"]
     target_name = unit_row["target_name"]
-    mous_row = db.get_mous(conn, mous_id)
-    band, config_type = mous_row["band"], mous_row["array_config"]
     mous_dir_id = to_dir_mous_id(mous_id)
 
-    imaging_dir = LINE_FINAL_DIR / target_name / f"B{band}_{config_type}"
+    # manual_line_imaging.py writes straight into <target>/ with no
+    # B<band>_<config> level (unlike the triage stage) -- must match it exactly
+    # or nothing gets cleaned up and the reset silently does nothing.
+    imaging_dir = LINE_FINAL_DIR / target_name
     img_base = Path(build_img_base(
         imaging_dir, target_name, mous_dir_id, unit_row["spw_idx"],
-        unit_row["species_name"], unit_row["frequency_ghz"], detection_id,
+        unit_row["species_name"], unit_row["frequency_ghz"], detection_id, robust,
     ))
 
     print(f"[reset-line-imaging] detection_id : {detection_id}")
     print(f"[reset-line-imaging] mous_id      : {mous_id}")
     print(f"[reset-line-imaging] target       : {target_name}")
     print(f"[reset-line-imaging] state        : {current_state}")
+    print(f"[reset-line-imaging] robust       : {robust}")
     print(f"[reset-line-imaging] imaging_dir  : {imaging_dir}")
 
     removed = []
@@ -122,6 +125,10 @@ if __name__ == "__main__":
     )
     parser.add_argument("--detection-id", type=int, required=True, help="line_admit_detection_id")
     parser.add_argument("--db-path", default=DB_PATH, help="Path to the SQLite database")
+    parser.add_argument("--robust", type=float, default=DEFAULT_ROBUST,
+                        help="Briggs robust of the run being reset. Products are named "
+                             "per-robust, so this must match the failed run or nothing "
+                             f"will be found (default: {DEFAULT_ROBUST})")
     args = parser.parse_args()
 
-    main(detection_id=args.detection_id, db_path=Path(args.db_path))
+    main(detection_id=args.detection_id, db_path=Path(args.db_path), robust=args.robust)

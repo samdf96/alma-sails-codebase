@@ -25,7 +25,8 @@ chain (alma_ops.imaging.line_imaging_utils.resolve_line_imaging_inputs),
 computes a frequency window centered on the confirmed line
 (compute_line_window), runs tclean -> impbcor -> exportfits
 (run_line_imaging), and advances the line_imaging_unit to 'complete'.
-Output: imaging/lines/final/<target>/B<band>_<config>/ (config.LINE_FINAL_DIR).
+Output: imaging/lines/final/<target>/ (config.LINE_FINAL_DIR).
+Note: unlike the triage stage, there is no B<band>_<config> level here.
 """
 
 from __future__ import annotations

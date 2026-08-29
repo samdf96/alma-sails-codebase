@@ -62,6 +62,7 @@ import shutil
 
 from alma_ops.imaging.continuum_config import DEFAULT_ROBUST, select_automask
 from alma_ops.imaging.line_imaging_config import (
+    BLANK_CHANNEL_WARN_FRAC,
     LINE_IMAGING_PAD_FLOOR_KMS,
     LINE_IMAGING_PAD_FRACTION,
     TCLEAN_LINE_IMAGING_SHARED,
@@ -208,15 +209,53 @@ def compute_line_window(
     }
 
 
+def _blank_channel_fraction(image_path: str) -> float | None:
+    """Fraction of channels in a CASA image with no data at all.
+
+    A channel that gridded no visibilities is exactly zero everywhere, so the
+    per-channel maximum is the cheapest reliable test. Returns None if the image
+    cannot be inspected -- a diagnostic must never be the thing that fails a run.
+    """
+    try:
+        import casatools
+        ia = casatools.image()
+        ia.open(image_path)
+        try:
+            stats = ia.statistics(axes=[0, 1])
+        finally:
+            ia.close()
+    except Exception as exc:
+        print(f"  [WARNING] blank-channel check skipped: {type(exc).__name__}: {exc}",
+              flush=True)
+        return None
+
+    maxima = stats.get("max", [])
+    try:
+        values = [float(v) for v in maxima]
+    except TypeError:
+        values = [float(maxima)]
+    if not values:
+        return None
+    return sum(1 for v in values if v == 0.0) / len(values)
+
+
 def build_img_base(
     imaging_dir, target_name: str, mous_dir_id: str, spw_idx: int,
     species_name: str | None, frequency_ghz: float, detection_id: int,
+    robust: float = DEFAULT_ROBUST,
 ) -> str:
     """Build the shared image basename, used by both run_line_imaging (to
     write to) and reset_line_imaging.py (to know what to delete without
     depending on imaging_products, which may not exist yet after a crash).
     Trailing det{detection_id} guarantees uniqueness even if two "Unknown"
-    lines round to the same frequency in the same spw. Folds in the curated
+    lines round to the same frequency in the same spw.
+
+    Every robust value gets an explicit _r<NN> suffix (0.5 -> _r05, 2.0 -> _r20),
+    so the weighting is always readable from the path and the same line can be
+    imaged at several weightings side by side. Without it an r=2.0 run would
+    silently overwrite the r=0.5 products. Note this renames products relative
+    to earlier runs, which recorded no suffix at all -- any imaging_products
+    paths written before this change point at filenames that no longer exist. Folds in the curated
     shorthand (species_shorthand.shorthand_for) alongside the full species
     slug when one exists, since the full descriptive name alone (e.g.
     "Cyclopropenylidene") is slower to scan on disk than its formula."""
@@ -224,9 +263,14 @@ def build_img_base(
     shorthand = shorthand_for(species_name)
     if shorthand:
         species_slug += "_" + re.sub(r"[^A-Za-z0-9]+", "_", shorthand).strip("_")
+    # 0.5 -> "_r05", 2.0 -> "_r20", -1.0 -> "_rm10". Two digits keeps the
+    # common values aligned on disk; the m prefix avoids a bare "-" in a filename.
+    tenths = int(round(robust * 10))
+    suffix = f"_rm{abs(tenths):02d}" if tenths < 0 else f"_r{tenths:02d}"
     return os.path.join(
         str(imaging_dir),
-        f"{target_name}_{mous_dir_id}_spw{spw_idx}_{species_slug}_{frequency_ghz:.4f}GHz_det{detection_id}",
+        f"{target_name}_{mous_dir_id}_spw{spw_idx}_{species_slug}_"
+        f"{frequency_ghz:.4f}GHz_det{detection_id}{suffix}",
     )
 
 
@@ -304,7 +348,8 @@ def run_line_imaging(
         raise RuntimeError("run_line_imaging must be called from inside a CASA session.")
 
     img_base = build_img_base(
-        imaging_dir, target_name, mous_dir_id, spw_idx, species_name, frequency_ghz, detection_id,
+        imaging_dir, target_name, mous_dir_id, spw_idx, species_name, frequency_ghz,
+        detection_id, robust,
     )
 
     _log_path = img_base + ".casa.log"
@@ -347,7 +392,13 @@ def run_line_imaging(
     vis_list: list = []
     spw_list: list = []
     for ms_path in ms_paths:
-        spw_str = cont_dat_to_spw_string(ms_path, {spw_idx: [(lo_ghz, hi_ghz)]})
+        # lo_ghz/hi_ghz come from compute_line_window in LSRK; the MS stores TOPO
+        # channel frequencies. ranges_frame makes the conversion explicit -- without
+        # it the comparison picks channels 31-70 MHz off and tclean grids nothing.
+        spw_str = cont_dat_to_spw_string(
+            ms_path, {spw_idx: [(lo_ghz, hi_ghz)]},
+            ranges_frame="LSRK", field=target_name,
+        )
         if not spw_str:
             print(f"  [WARNING] Empty channel selection for {ms_path} — skipping.", flush=True)
             continue
@@ -401,6 +452,26 @@ def run_line_imaging(
     image_fits_path   = img_base + ".image.fits"
     pbcor_fits_path    = img_base + ".image.pbcor.fits"
 
+    # Guard: tclean raises nothing when its channel selection lands outside the
+    # requested grid -- it grids no visibilities, writes an all-zero cube, and
+    # exports cleanly. Six cubes were recorded 'complete' that way before anyone
+    # noticed (BLANK_CUBES_REPORT.md). Fail loudly instead.
+    blank_frac = _blank_channel_fraction(image_path)
+    if blank_frac is not None:
+        print(f"  [check] empty channels: {blank_frac*100:.1f}%", flush=True)
+        if blank_frac >= 1.0:
+            raise RuntimeError(
+                f"tclean gridded no data for detection {detection_id} "
+                f"({species_name}, {frequency_ghz:.4f} GHz): every channel of "
+                f"{image_path} is empty. The channel selection almost certainly "
+                f"falls outside the requested frequency grid -- check the frame of "
+                f"the window against the MS channel frequencies."
+            )
+        if blank_frac > BLANK_CHANNEL_WARN_FRAC:
+            print(f"  [WARNING] {blank_frac*100:.1f}% of channels are empty "
+                  f"(> {BLANK_CHANNEL_WARN_FRAC*100:.0f}%). The window may only "
+                  f"partly overlap the data.", flush=True)
+
     print("  [impbcor] …", flush=True)
     impbcor(imagename=image_path, pbimage=img_base + ".pb", outfile=pbcor_image, overwrite=True)
 
@@ -430,6 +501,7 @@ def run_line_imaging(
         "lo_ghz":                  lo_ghz,
         "hi_ghz":                   hi_ghz,
         "casa_products_cleaned":     not keep_casa_products,
+        "robust":                     robust,
     }
     if phasecenter is not None:
         result["phasecenter"] = phasecenter

@@ -27,6 +27,7 @@ deployments:
   entrypoint: download_flow.py:download_mous_flow
   parameters:
     use_staging: false
+  schedules: []
   work_pool:
     name: headless-runs
     work_queue_name: null
@@ -39,6 +40,7 @@ deployments:
   entrypoint: split_flow.py:split_mous_flow
   parameters:
     use_staging: false
+  schedules: []
   work_pool:
     name: headless-runs
     work_queue_name: null
@@ -53,6 +55,7 @@ deployments:
     ncores: 4
     ram_gb: 16
     use_staging: false
+  schedules: []
   work_pool:
     name: headless-runs
     work_queue_name: null
@@ -67,6 +70,7 @@ deployments:
   parameters:
     robust: 0.5
     use_staging: false
+  schedules: []
   work_pool:
     name: headless-runs
     work_queue_name: null
@@ -80,6 +84,7 @@ deployments:
   entrypoint: line_triage_flow.py:line_triage_mous_flow
   parameters:
     use_staging: false
+  schedules: []
   work_pool:
     name: headless-runs
     work_queue_name: null
@@ -94,6 +99,7 @@ deployments:
   entrypoint: line_admit_flow.py:admit_lineid_flow
   parameters:
     use_staging: false
+  schedules: []
   work_pool:
     name: headless-runs
     work_queue_name: null
@@ -108,6 +114,7 @@ deployments:
   entrypoint: line_imaging_flow.py:line_imaging_flow
   parameters:
     use_staging: false
+  schedules: []
   work_pool:
     name: headless-runs
     work_queue_name: null

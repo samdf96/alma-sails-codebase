@@ -88,6 +88,7 @@ def launch_line_imaging_session(
     ncores: Optional[int],
     ram_gb: Optional[int],
     use_staging: bool,
+    robust: Optional[float] = None,
 ) -> str:
     """Submit a CASA pipeline headless session to run deep line imaging.
 
@@ -102,7 +103,9 @@ def launch_line_imaging_session(
     canonical_db_path = db.to_canonical(db_path)
     job_name = f"line-imaging-det{detection_id}-{datetime.now().strftime('%Y%m%d-%H%M')}"
 
-    args = f"{detection_id} {canonical_db_path} {'1' if force else ''} {ncores if ncores is not None else 0}"
+    args = (f"{detection_id} {canonical_db_path} {'1' if force else ''} "
+            f"{ncores if ncores is not None else 0}"
+            f"{'' if robust is None else f' {robust}'}")
 
     session = make_session(use_staging)
     if ncores is None:
@@ -128,6 +131,7 @@ def line_imaging_flow(
     force: bool = False,
     ncores: Optional[int] = None,
     ram_gb: Optional[int] = None,
+    robust: Optional[float] = None,
     use_staging: bool = False,
     db_path: Optional[str] = None,
 ) -> None:
@@ -139,7 +143,15 @@ def line_imaging_flow(
     detection_id:
         line_admit_detection_id. Must already have review_status='confirmed'.
     force:
-        Re-run even if the line_imaging_unit is already 'complete'.
+        Re-run even if the line_imaging_unit is already 'complete'. Required to
+        image a detection at a second robust value, since the unit is already
+        'complete' from the first -- imaging_products gains a second entry
+        rather than replacing the first.
+    robust:
+        Briggs robust weighting. None (default) leaves it to
+        manual_line_imaging.py's own default of 0.5. Output filenames carry the
+        value (_r05 / _r20), so several weightings coexist without overwriting
+        each other.
     ncores:
         MPI cores to allocate. None (default) is flexible mode -- no
         cores/RAM pinned, plain casa -c. >1 enables parallel tclean via
@@ -155,7 +167,8 @@ def line_imaging_flow(
     db_path = db_path or str(DB_PATH)
 
     validate_line_imaging_ready(detection_id, db_path)
-    launch_line_imaging_session(detection_id, db_path, force, ncores, ram_gb, use_staging)
+    launch_line_imaging_session(detection_id, db_path, force, ncores, ram_gb,
+                                use_staging, robust)
 
 
 if __name__ == "__main__":
@@ -170,6 +183,9 @@ if __name__ == "__main__":
                         help="MPI cores (omit for flexible mode; >1 enables parallel tclean)")
     parser.add_argument("--ram-gb",   type=int, default=None,
                         help="RAM in GB (default 16 when ncores>1, ignored in flexible mode)")
+    parser.add_argument("--robust",   type=float, default=None,
+                        help="Briggs robust weighting (default: 0.5). Output names "
+                             "carry it as _r05/_r20, so weightings do not overwrite.")
     parser.add_argument("--db-path",  default=None,            help="Path to the SQLite database")
     parser.add_argument("--use-staging", action="store_true", help="Submit to CANFAR staging cluster")
     args = parser.parse_args()
@@ -179,6 +195,7 @@ if __name__ == "__main__":
         force=args.force,
         ncores=args.ncores,
         ram_gb=args.ram_gb,
+        robust=args.robust,
         db_path=args.db_path,
         use_staging=args.use_staging,
     )
