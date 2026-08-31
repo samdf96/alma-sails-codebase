@@ -49,6 +49,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from alma_ops import db
+from alma_ops.utils import code_version
 from alma_ops.config import CONTINUUM_IMAGING_DIR, DB_PATH
 
 
@@ -236,6 +237,9 @@ def main() -> None:
     products_entry["robust"] = args.robust
     products_entry["gridder"] = "mosaic" if is_mosaic else "standard"
     products_entry["completed_at"] = datetime.now(timezone.utc).isoformat()
+    # Which code produced this product. Lets a later query tell pre- from
+    # post-fix products directly instead of inferring it from timestamps.
+    products_entry["code_commit"] = code_version()
 
     conn = db.get_connection(args.db_path)
     db.record_imaging_transition(

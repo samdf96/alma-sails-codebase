@@ -10,6 +10,8 @@ that actually needs it, and the only one ever called from VM-shell scripts
 (seed_database.py) rather than CASA.
 """
 
+from __future__ import annotations
+
 
 def to_db_mous_id(mous_id: str) -> str:
     """Convert a MOUS ID to database form (uid://A001/X123/Xabc).
@@ -80,3 +82,70 @@ def to_dir_mous_id(mous_id: str) -> str:
             raise ValueError(f"Invalid uid:// format: {mous_id}")
         return "uid___" + "_".join(parts)
     raise ValueError(f"Cannot interpret MOUS ID: {mous_id}")
+
+
+def code_version() -> str | None:
+    """Short git commit of the codebase, for stamping into product records.
+
+    Products are only as trustworthy as the code that made them: a TOPO/LSRK
+    frame bug silently produced wrong cubes for months, and telling a good
+    product from a bad one afterwards meant inferring it from timestamps.
+
+    Reads .git directly rather than shelling out to `git`. The stamp has to work
+    inside CANFAR headless containers, where invoking git is unreliable -- it may
+    not be installed, and when the repo is owned by a different uid than the
+    container user, git refuses with "dubious ownership" (exit 128, no output).
+    Both failures return None silently, which is how two completed runs ended up
+    unstamped and would have been re-queued forever.
+
+    Plain file reads have neither problem. The git binary is still used, best
+    effort, only to mark a dirty tree.
+
+    Returns None if the commit genuinely cannot be determined.
+    """
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[1]
+    git_dir = repo / ".git"
+    rev = None
+    try:
+        head = (git_dir / "HEAD").read_text().strip()
+        if head.startswith("ref:"):
+            ref = head.split(None, 1)[1].strip()
+            ref_file = git_dir / ref
+            if ref_file.exists():
+                rev = ref_file.read_text().strip()
+            else:
+                # ref may only exist in packed-refs
+                packed = git_dir / "packed-refs"
+                if packed.exists():
+                    for line in packed.read_text().splitlines():
+                        if line.startswith("#") or not line.strip():
+                            continue
+                        parts = line.split()
+                        if len(parts) == 2 and parts[1] == ref:
+                            rev = parts[0]
+                            break
+        else:
+            rev = head          # detached HEAD holds the sha directly
+    except Exception:
+        return None
+
+    if not rev or len(rev) < 7:
+        return None
+    rev = rev[:7]
+
+    # Dirty marker is best effort: if git is unavailable the commit alone is
+    # still far better than nothing.
+    try:
+        import subprocess
+
+        out = subprocess.run(
+            ["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=no"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            rev += "-dirty"
+    except Exception:
+        pass
+    return rev

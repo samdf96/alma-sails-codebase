@@ -44,7 +44,7 @@ from alma_ops import db
 from alma_ops.config import DB_PATH, LINE_FINAL_DIR
 from alma_ops.imaging.line_imaging_config import LINE_IMAGING_PAD_FLOOR_KMS, LINE_IMAGING_PAD_FRACTION
 from alma_ops.imaging.species_shorthand import species_label
-from alma_ops.utils import to_dir_mous_id
+from alma_ops.utils import code_version, to_dir_mous_id
 
 
 def main() -> None:
@@ -179,6 +179,7 @@ def main() -> None:
         **result, "robust": args.robust,
         "pad_fraction": pad_fraction, "pad_floor_kms": pad_floor_kms,
         "completed_at": datetime.now(timezone.utc).isoformat(),
+        "code_commit": code_version(),
     }
     conn = db.get_connection(args.db_path)
     db.record_line_imaging_transition(

@@ -70,6 +70,7 @@ def main() -> None:
     is_mosaic       = bool(payload.get("is_mosaic", False))
 
     from alma_ops import db
+    from alma_ops.utils import code_version
 
     conn = db.get_connection(db_path)
     unit_row    = db.get_imaging_pipeline_state(conn, imaging_unit_id)
@@ -116,6 +117,10 @@ def main() -> None:
     products_entry["robust"] = robust
     products_entry["gridder"] = "mosaic" if is_mosaic else "standard"
     products_entry["completed_at"] = datetime.now(timezone.utc).isoformat()
+    # Which code produced this product. batch_continuum_reimage.py decides what
+    # is still outstanding by looking for a post-fix commit here -- without it
+    # every unit looks unprocessed forever and the campaign never converges.
+    products_entry["code_commit"] = code_version()
 
     conn = db.get_connection(db_path)
     db.record_imaging_transition(
