@@ -682,3 +682,74 @@ self-consistent with stored `velocity_kms` values in the DB — but "reproduces 
 reported velocity correctly" and "recovers the true sky frequency" turned out to be two
 different claims. The bug only surfaced by actually looking at a real cube, not by re-deriving
 the algebra harder. Worth remembering for the next math-from-a-vendored-codebase derivation.
+
+---
+
+## Known Constraint: sshfs Working Directory Makes Every Python Startup ~45x Slower
+
+`prefect deploy --all` takes minutes on the VM. The cause is not Prefect, the flow
+files, or the network to the Prefect server — it is the shell's *working directory*
+being on the sshfs mount.
+
+### Measurement
+
+`strace -f -w -c` (wall-clock attribution, not the default system-time) on a bare
+`prefect --version` run from `alma-sails-codebase/flows`:
+
+```
+% time     seconds  usecs/call     calls    errors syscall
+------ ----------- ----------- --------- --------- -----------
+ 98.75  130.638330       16234      8047      1655 newfstatat
+  0.89    1.174117       41932        28           futex
+  0.07    0.089530          23      3834           read
+```
+
+8047 path lookups at ~16 ms each. Everything else combined is under two seconds.
+16 ms is an sshfs round trip: a micro-benchmark on this mount measures ~25 ms for a
+lookup that misses and ~0 ms for one already cached, and the import machinery touches
+thousands of *distinct* paths, so most are first-touch.
+
+Same command, same venv, warm caches, alternating between directories:
+
+```
+local cwd   run1:   2.60 s      (/mnt/pspace, ext4)
+sshfs cwd   run1: 112.67 s      (alma-sails-codebase/flows, fuse.sshfs)
+local cwd   run2:   2.60 s
+sshfs cwd   run2: 124.42 s
+```
+
+The local timings are identical to the hundredth of a second; the sshfs ones vary by
+12 s, which is jitter across ~8000 round trips. Prefect's venv is on local ext4 in
+both cases and the flow files are not read at all at `--version` — only the working
+directory differs.
+
+`prefect deploy --all` then additionally imports all seven flow modules off sshfs to
+resolve their entrypoints, on top of that startup cost.
+
+### What is *not* established
+
+Which part of Prefect resolves thousands of paths relative to the cwd was not isolated.
+Two things rule out the obvious guess: `prefect` is a console script, so `sys.path[0]`
+is `/mnt/pspace/prefect-env/bin` and the cwd is never on the import path; and
+`PYTHONSAFEPATH=1` only moved it from 130 s to 104 s. The effect is reproducible, the
+mechanism inside Prefect is inferred.
+
+### Likely also behind the CANFAR ReadTimeouts
+
+`session.create()` returning `httpx.ReadTimeout` while the session is in fact created
+server-side (see the `create_checked()` work in `flows/canfar_utils.py`) is the same
+link with the same latency. Worth treating the two as one cause rather than two
+unrelated annoyances.
+
+### Options, none taken
+
+Left as-is deliberately — redeploys are rare and the cost is tolerable.
+
+1. A local staging directory of symlinks (`/mnt/pspace/sails-deploy/` pointing at
+   `prefect.yaml`, the seven flow files, and `canfar_utils.py`), deployed from there.
+   Only the cwd needs to be local; the symlink targets stay on `/arc` and the relative
+   `entrypoint:` values still resolve. The `pull` step already hardcodes the real sshfs
+   path as the *worker's* working directory, so runtime is unaffected. Untested.
+2. Absolute `entrypoint:` paths plus `prefect deploy --prefect-file <abs path>` run from
+   a local cwd. More invasive — changes what is stored in each deployment.
+3. Live with it.

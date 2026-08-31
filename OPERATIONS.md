@@ -79,6 +79,13 @@ sshfs \
 
 The `reconnect,ServerAliveInterval=15,ServerAliveCountMax=10` options are load-bearing, not optional extras — without them the mount silently drops on any network blip, and every script reading `/home/ubuntu/canfar_arc/...` starts failing until it's manually remounted. `ServerAliveInterval=15` sends a keepalive every 15s; `ServerAliveCountMax=10` tolerates up to 10 missed keepalives (~150s) before giving up; `reconnect` then re-establishes the mount automatically rather than leaving it dead.
 
+Be aware that *running commands from* a directory under this mount is expensive, not just
+reading files from it. A path lookup on the mount costs ~16 ms, and Python startup performs
+thousands of them, so `prefect --version` takes ~2.6 s from `/mnt/pspace` and ~120 s from
+`alma-sails-codebase/flows` — same venv, same command, only the working directory differs.
+This is why `prefect deploy --all` takes minutes. See DEVLOG.md, "Known Constraint: sshfs
+Working Directory Makes Every Python Startup ~45x Slower".
+
 ### CANFAR Authentication
 
 Launching CANFAR headless sessions (Kueue jobs) from the VM — rather than from inside an interactive CANFAR session, where auth is handled automatically — needs an explicit login:
