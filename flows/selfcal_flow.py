@@ -30,7 +30,6 @@ Direct invocation (VM shell, for testing):
 from __future__ import annotations
 
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -41,7 +40,7 @@ from prefect import flow, get_run_logger, task
 from alma_ops import db
 from alma_ops.config import CASA_IMAGE, DB_PATH
 from alma_ops.db import CANONICAL_PREFIX
-from canfar_utils import make_session
+from canfar_utils import create_checked, key_selfcal, make_session, report_launch, resource_desc
 
 _HEADLESS_SCRIPT = f"{CANONICAL_PREFIX}/alma-sails-codebase/scripts/manual_selfcal.sh"
 
@@ -102,23 +101,20 @@ def launch_selfcal_session(
     logger = get_run_logger()
 
     canonical_db_path = db.to_canonical(db_path)
-    job_name = f"selfcal-{datetime.now().strftime('%Y%m%d-%H%M')}"
+    unit_key = key_selfcal(mous_id)
     args = f"--mous-id {mous_id} --db-path {canonical_db_path} --ncores {ncores if ncores is not None else 0}"
 
+    kwargs = dict(image=CASA_IMAGE, cmd=_HEADLESS_SCRIPT, args=args)
+    if ncores is not None:
+        kwargs["cores"] = ncores
+    if ram_gb is not None:
+        kwargs["ram"] = ram_gb
+
     session = make_session(use_staging)
-    if ncores is None:
-        job_id = session.create(name=job_name, image=CASA_IMAGE, cmd=_HEADLESS_SCRIPT, args=args)
-    else:
-        job_id = session.create(
-            name=job_name, image=CASA_IMAGE, cores=ncores, ram=ram_gb, cmd=_HEADLESS_SCRIPT, args=args,
-        )
+    result = create_checked(session, unit_key, **kwargs)
 
-    if not job_id:
-        raise RuntimeError(f"[{mous_id}] CANFAR session launch returned no job ID")
-
-    mode_desc = "flexible mode" if ncores is None else f"{ncores} cores, {ram_gb} GB RAM"
-    logger.info(f"[{mous_id}] Headless selfcal session launched: {job_id[0]} ({mode_desc})")
-    return job_id[0]
+    mode_desc = resource_desc(ncores, ram_gb)
+    return report_launch(logger, f"[{mous_id}]", f"selfcal ({mode_desc})", result)
 
 
 @flow(name="selfcal-mous", log_prints=True)

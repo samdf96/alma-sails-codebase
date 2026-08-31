@@ -34,7 +34,6 @@ Direct invocation (VM shell, for testing):
 from __future__ import annotations
 
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -45,7 +44,7 @@ from prefect import flow, get_run_logger, task
 from alma_ops import db
 from alma_ops.config import CASA_IMAGE, DB_PATH
 from alma_ops.db import CANONICAL_PREFIX
-from canfar_utils import make_session
+from canfar_utils import create_checked, key_admit, make_session, report_launch
 
 _HEADLESS_SCRIPT = f"{CANONICAL_PREFIX}/alma-sails-codebase/scripts/headless_admit_lineid.sh"
 
@@ -100,22 +99,19 @@ def launch_admit_lineid_session(
     logger = get_run_logger()
 
     canonical_db_path = db.to_canonical(db_path)
-    job_name = f"admit-lineid-{datetime.now().strftime('%Y%m%d-%H%M')}"
+    unit_key = key_admit(mous_id, source, spw)
 
     args = f"{mous_id} {source} {spw} {canonical_db_path} {'1' if force else ''}"
 
-    session = make_session(use_staging)
-    if ram_gb is None:
-        job_id = session.create(name=job_name, image=CASA_IMAGE, cmd=_HEADLESS_SCRIPT, args=args)
-    else:
-        job_id = session.create(name=job_name, image=CASA_IMAGE, ram=ram_gb, cmd=_HEADLESS_SCRIPT, args=args)
+    kwargs = dict(image=CASA_IMAGE, cmd=_HEADLESS_SCRIPT, args=args)
+    if ram_gb is not None:
+        kwargs["ram"] = ram_gb
 
-    if not job_id:
-        raise RuntimeError(f"[{mous_id} {source} spw={spw}] CANFAR session launch returned no job ID")
+    session = make_session(use_staging)
+    result = create_checked(session, unit_key, **kwargs)
 
     mode_desc = "flexible mode" if ram_gb is None else f"{ram_gb} GB RAM pinned"
-    logger.info(f"[{mous_id} {source} spw={spw}] Headless ADMIT session launched: {job_id[0]} ({mode_desc})")
-    return job_id[0]
+    return report_launch(logger, f"[{mous_id} {source} spw={spw}]", f"ADMIT ({mode_desc})", result)
 
 
 @flow(name="admit-lineid", log_prints=True)

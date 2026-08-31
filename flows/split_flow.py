@@ -17,7 +17,6 @@ Direct invocation (VM shell, for testing):
 from __future__ import annotations
 
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -28,7 +27,7 @@ from prefect import flow, get_run_logger, task
 from alma_ops import db
 from alma_ops.config import CASA_IMAGE, DB_PATH
 from alma_ops.db import CANONICAL_PREFIX
-from canfar_utils import make_session
+from canfar_utils import create_checked, key_split, make_session, report_launch
 
 _HEADLESS_SCRIPT = f"{CANONICAL_PREFIX}/alma-sails-codebase/scripts/headless_split.sh"
 
@@ -62,26 +61,23 @@ def launch_split_session(
     logger = get_run_logger()
 
     canonical_db_path = db.to_canonical(db_path)
-    job_name = f"split-{datetime.now().strftime('%Y%m%d-%H%M')}"
+    unit_key = key_split(mous_id)
 
     args = f"{mous_id} {canonical_db_path}"
     if spw_override:
         args = f"{args} {spw_override}"
 
     session = make_session(use_staging)
-    job_id = session.create(
-        name=job_name,
+    result = create_checked(
+        session,
+        unit_key,
         image=CASA_IMAGE,
         cmd=_HEADLESS_SCRIPT,
         args=args,
     )
 
-    if not job_id:
-        raise RuntimeError(f"[{mous_id}] CANFAR session launch returned no job ID")
-
-    logger.info(f"[{mous_id}] Headless split session launched: {job_id[0]}"
-                + (f" (SPW override: {spw_override})" if spw_override else ""))
-    return job_id[0]
+    detail = f" (SPW override: {spw_override})" if spw_override else ""
+    return report_launch(logger, f"[{mous_id}]", f"split{detail}", result)
 
 
 @flow(name="split-mous", log_prints=True)

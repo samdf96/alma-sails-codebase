@@ -17,7 +17,6 @@ Direct invocation (VM shell, for testing):
 from __future__ import annotations
 
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -28,7 +27,7 @@ from prefect import flow, get_run_logger, task
 from alma_ops import db
 from alma_ops.config import ASTROML_IMAGE, DB_PATH
 from alma_ops.db import CANONICAL_PREFIX
-from canfar_utils import make_session
+from canfar_utils import create_checked, key_download, make_session, report_launch
 
 # Canonical path to the headless entry script
 _HEADLESS_SCRIPT = f"{CANONICAL_PREFIX}/alma-sails-codebase/scripts/headless_download.sh"
@@ -66,21 +65,18 @@ def launch_download_session(mous_id: str, srdp_url: str, db_path: str, use_stagi
     logger = get_run_logger()
 
     canonical_db_path = db.to_canonical(db_path)
-    job_name = f"download-{datetime.now().strftime('%Y%m%d-%H%M')}"
+    unit_key = key_download(mous_id)
 
     session = make_session(use_staging)
-    job_id = session.create(
-        name=job_name,
+    result = create_checked(
+        session,
+        unit_key,
         image=ASTROML_IMAGE,
         cmd=_HEADLESS_SCRIPT,
         args=f"{mous_id} {srdp_url} {canonical_db_path}",
     )
 
-    if not job_id:
-        raise RuntimeError(f"[{mous_id}] CANFAR session launch returned no job ID")
-
-    logger.info(f"[{mous_id}] Headless download session launched: {job_id[0]}")
-    return job_id[0]
+    return report_launch(logger, f"[{mous_id}]", "download", result)
 
 
 @flow(name="download-mous", log_prints=True)

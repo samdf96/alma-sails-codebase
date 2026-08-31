@@ -34,7 +34,6 @@ Direct invocation (VM shell, for testing):
 from __future__ import annotations
 
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -45,7 +44,8 @@ from prefect import flow, get_run_logger, task
 from alma_ops import db
 from alma_ops.config import CASA_IMAGE, DB_PATH
 from alma_ops.db import CANONICAL_PREFIX
-from canfar_utils import make_session
+from alma_ops.imaging.continuum_config import DEFAULT_ROBUST
+from canfar_utils import create_checked, key_line_imaging, make_session, report_launch, resource_desc
 
 _HEADLESS_SCRIPT = f"{CANONICAL_PREFIX}/alma-sails-codebase/scripts/headless_line_imaging.sh"
 
@@ -101,28 +101,29 @@ def launch_line_imaging_session(
     logger = get_run_logger()
 
     canonical_db_path = db.to_canonical(db_path)
-    job_name = f"line-imaging-det{detection_id}-{datetime.now().strftime('%Y%m%d-%H%M')}"
+    # robust=None means "let the headless script use its default"; the key has
+    # to name the value that will actually be used, or a None launch and an
+    # explicit-0.5 launch would look like different units to the guard.
+    unit_key = key_line_imaging(
+        detection_id, DEFAULT_ROBUST if robust is None else robust)
 
     args = (f"{detection_id} {canonical_db_path} {'1' if force else ''} "
             f"{ncores if ncores is not None else 0}"
             f"{'' if robust is None else f' {robust}'}")
 
+    kwargs = dict(image=CASA_IMAGE, cmd=_HEADLESS_SCRIPT, args=args)
+    if ncores is not None:
+        kwargs["cores"] = ncores
+    effective_ram = ram_gb if ram_gb is not None else (
+        _PARALLEL_RAM_GB if ncores is not None else None)
+    if effective_ram is not None:
+        kwargs["ram"] = effective_ram
+
     session = make_session(use_staging)
-    if ncores is None:
-        job_id = session.create(name=job_name, image=CASA_IMAGE, cmd=_HEADLESS_SCRIPT, args=args)
-    else:
-        effective_ram = ram_gb if ram_gb is not None else _PARALLEL_RAM_GB
-        job_id = session.create(
-            name=job_name, image=CASA_IMAGE, cores=ncores, ram=effective_ram,
-            cmd=_HEADLESS_SCRIPT, args=args,
-        )
+    result = create_checked(session, unit_key, **kwargs)
 
-    if not job_id:
-        raise RuntimeError(f"[detection {detection_id}] CANFAR session launch returned no job ID")
-
-    mode_desc = "flexible mode" if ncores is None else f"{ncores} cores, {ram_gb or _PARALLEL_RAM_GB} GB RAM"
-    logger.info(f"[detection {detection_id}] Headless line-imaging session launched: {job_id[0]} ({mode_desc})")
-    return job_id[0]
+    mode_desc = resource_desc(ncores, effective_ram)
+    return report_launch(logger, f"[detection {detection_id}]", f"line-imaging ({mode_desc})", result)
 
 
 @flow(name="line-imaging", log_prints=True)
@@ -157,8 +158,8 @@ def line_imaging_flow(
         cores/RAM pinned, plain casa -c. >1 enables parallel tclean via
         mpicasa; RAM defaults to 16 GB unless ram_gb is set explicitly.
     ram_gb:
-        RAM in GB to pin on the headless session. Only used when ncores is
-        not None.
+        RAM in GB to pin on the headless session, independently of ncores --
+        pinning RAM alone is valid. Defaults to 16 GB when ncores is set.
     use_staging:
         If True, submit the headless session to the CANFAR staging cluster.
     db_path:
@@ -182,7 +183,7 @@ if __name__ == "__main__":
     parser.add_argument("--ncores",   type=int, default=None,
                         help="MPI cores (omit for flexible mode; >1 enables parallel tclean)")
     parser.add_argument("--ram-gb",   type=int, default=None,
-                        help="RAM in GB (default 16 when ncores>1, ignored in flexible mode)")
+                        help="RAM in GB to pin (independent of --ncores; defaults to 16 when ncores is set)")
     parser.add_argument("--robust",   type=float, default=None,
                         help="Briggs robust weighting (default: 0.5). Output names "
                              "carry it as _r05/_r20, so weightings do not overwrite.")
