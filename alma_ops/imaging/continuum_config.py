@@ -82,7 +82,22 @@ TCLEAN_SHARED: dict = {
     "niter":       10000,
     "gain":        0.1,
     "cyclefactor": 2.0,
-    "threshold":   "0.0mJy",         # masking drives stopping, not threshold
+    "threshold":   "0.0mJy",         # superseded by nsigma; tclean stops at
+                                     # max(threshold, nsigma * rms)
+    # Stop at 3x the residual rms, measured by tclean itself each major cycle --
+    # no pre-made dirty image needed. Added 2026-08-30 on evidence: of 15 sampled
+    # continuum runs, 12 stopped on "iteration limit" rather than converging, and
+    # 11 of those ended BELOW 3 sigma (median final peak residual 0.1 sigma). They
+    # were cleaning noise into the model for 25-85% of the run -- EC_53 B6 7m
+    # crossed 3 sigma at measurement 7 of 46. The 2 that converged on "zero mask"
+    # both ended near 4.6 sigma, so this floor does not touch the cases where
+    # auto-multithresh already works; it only catches the ones where it does not.
+    "nsigma":      3.0,
+    # The slower, outlier-resistant noise estimate. Irrelevant while nsigma was 0
+    # and only auto-multithresh used the noise; now that it sets the stopping
+    # point, a MAD estimate biased by bright emission would stop the clean in the
+    # wrong place.
+    "fastnoise":   False,
     "usemask":     "auto-multithresh",
     "interactive": False,
     "savemodel":   "none",
