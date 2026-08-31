@@ -62,6 +62,7 @@ import shutil
 
 from alma_ops.imaging.continuum_config import DEFAULT_ROBUST, select_automask
 from alma_ops.imaging.line_imaging_config import (
+    LINE_IMAGING_PAD_MAX_CHANNELS,
     BLANK_CHANNEL_WARN_FRAC,
     LINE_IMAGING_PAD_FLOOR_KMS,
     LINE_IMAGING_PAD_FRACTION,
@@ -139,6 +140,7 @@ def compute_line_window(
     bin_factor: int,
     pad_fraction: float = LINE_IMAGING_PAD_FRACTION,
     pad_floor_kms: float = LINE_IMAGING_PAD_FLOOR_KMS,
+    pad_max_channels: int = LINE_IMAGING_PAD_MAX_CHANNELS,
 ) -> dict:
     """Compute the deep-imaging frequency window for one confirmed detection.
 
@@ -160,8 +162,12 @@ def compute_line_window(
         Source VLSR, from targets.vlsr_kms.
     bin_factor:
         Native channels averaged per triage-cube channel (from triage_products).
-    pad_fraction, pad_floor_kms:
-        Padding added on each side of the detection's empirical linewidth.
+    pad_fraction, pad_floor_kms, pad_max_channels:
+        Per-side padding around the detection's empirical linewidth. The pad is
+        pad_fraction x linewidth, floored at pad_floor_kms so a narrow line still
+        gets usable baseline, and capped at pad_max_channels native channels so a
+        broad one does not run away -- padding proportional to a very wide line
+        buys nothing and pushes the window past the SPW edge.
 
     Returns
     -------
@@ -180,6 +186,9 @@ def compute_line_window(
     try:
         native_chanwidth_hz = float(abs(np.asarray(msmd.chanwidths(spw_idx))[0]))
         center_freq_hz = float(msmd.meanfreq(spw_idx))
+        _chan_freqs = np.asarray(msmd.chanfreqs(spw_idx), dtype=float)
+        spw_lo_ghz = float(_chan_freqs.min()) / 1e9
+        spw_hi_ghz = float(_chan_freqs.max()) / 1e9
     finally:
         msmd.done()
 
@@ -195,9 +204,27 @@ def compute_line_window(
     n_chan_detection = detection["endchan"] - detection["startchan"] + 1
     linewidth_kms = n_chan_detection * bin_factor * native_chanwidth_hz / center_freq_hz * C_KMS
 
-    half_window_kms = linewidth_kms / 2 + max(pad_fraction * linewidth_kms, pad_floor_kms)
+    chan_kms = native_chanwidth_hz / center_freq_hz * C_KMS
+    pad_kms = max(pad_fraction * linewidth_kms, pad_floor_kms)
+    # Ceiling in channels: a broad line needs enough baseline to sit against,
+    # not padding proportional to its own width.
+    pad_kms = min(pad_kms, pad_max_channels * chan_kms)
+
+    half_window_kms = linewidth_kms / 2 + pad_kms
     lo_ghz = freq_peak_ghz * (1 - half_window_kms / C_KMS)
     hi_ghz = freq_peak_ghz * (1 + half_window_kms / C_KMS)
+
+    # Clip to the SPW's own extent. Channels beyond it can never be filled --
+    # tclean blanks them, inflating the cube for no signal (det 461 came back
+    # 43% empty this way).
+    clipped_lo = lo_ghz < spw_lo_ghz
+    clipped_hi = hi_ghz > spw_hi_ghz
+    lo_ghz = max(lo_ghz, spw_lo_ghz)
+    hi_ghz = min(hi_ghz, spw_hi_ghz)
+    if clipped_lo or clipped_hi:
+        print(f"  [window] clipped to SPW extent "
+              f"({'low ' if clipped_lo else ''}{'high' if clipped_hi else ''}): "
+              f"{lo_ghz:.6f}-{hi_ghz:.6f} GHz", flush=True)
 
     return {
         "freq_peak_ghz": freq_peak_ghz,
@@ -206,6 +233,8 @@ def compute_line_window(
         "hi_ghz": hi_ghz,
         "native_chanwidth_hz": native_chanwidth_hz,
         "center_freq_hz": center_freq_hz,
+        "pad_kms": pad_kms,
+        "clipped_to_spw": bool(clipped_lo or clipped_hi),
     }
 
 

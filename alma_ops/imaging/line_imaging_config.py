@@ -25,6 +25,13 @@ from __future__ import annotations
 LINE_IMAGING_PAD_FRACTION: float = 1.0   # per side, as a multiple of measured linewidth
 LINE_IMAGING_PAD_FLOOR_KMS: float = 5.0  # minimum per-side padding regardless of measured width
 
+# Ceiling on per-side padding, in NATIVE channels. Padding is a fraction of the
+# measured linewidth, which is right for narrow lines and wrong for broad ones:
+# a 564-channel SiO outflow (det 461) asked for a window three times its own
+# width, 43% of which fell outside the SPW entirely and came back blank. A wide
+# line needs only enough context to see its baseline, not proportionally more.
+LINE_IMAGING_PAD_MAX_CHANNELS: int = 128
+
 # Warn when more than this fraction of a finished cube's channels gridded no
 # data. 100% blank is always a hard failure; a smaller fraction usually means
 # the frequency window only partly overlaps the selected data.
