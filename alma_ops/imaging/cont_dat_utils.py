@@ -142,10 +142,23 @@ def chanfreqs_in_frame(ms_path, spw_idx: int, frame: str, field=None):
     try:
         kwargs = dict(spwids=[int(spw_idx)], mode="channel", outframe=frame)
         if field is not None:
+            # The field only refines which sky direction the TOPO->LSRK
+            # projection uses. It is a refinement, not a requirement: without it
+            # cvelfreqs still agreed with an independent measures calculation to
+            # 0.05 MHz on this survey. So a name that does not exist in THIS MS
+            # must not kill the job -- imaging units can carry a parent MOUS's
+            # field name (e.g. "Serpens_Main_and_Serpens_South") that no
+            # individual MS knows, which is why the caller already substitutes a
+            # different name for cont.dat lookups.
+            fids = []
             msmd = casatools.msmetadata()
             msmd.open(str(ms_path))
             try:
                 fids = [int(f) for f in msmd.fieldsforname(str(field))]
+            except Exception as exc:
+                print(f"  [WARNING] field {field!r} not in {ms_path}; converting to "
+                      f"{frame} without a field direction ({type(exc).__name__})",
+                      flush=True)
             finally:
                 msmd.done()
             if fids:
