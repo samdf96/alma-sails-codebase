@@ -149,3 +149,33 @@ def code_version() -> str | None:
     except Exception:
         pass
     return rev
+
+
+def commits_since(baseline: str, repo_root=None) -> list:
+    """Short SHAs of `baseline` and every commit after it, newest first.
+
+    For deciding which recorded code_commit stamps count as current. A single
+    accepted commit stops working the moment anything else lands: the campaign
+    baseline is "the commit at which the output changed", and every commit after
+    it produces equally valid products, so the acceptable set is a range.
+
+    Unlike code_version(), this shells out to git and is therefore VM-only --
+    the CANFAR containers have no git, or refuse with "dubious ownership".
+    Callers are the project-root reporting/launcher scripts, never a headless
+    job. Returns [] if git is unavailable or the baseline is unknown, so the
+    caller can fall back rather than crash.
+    """
+    import subprocess
+    from pathlib import Path
+
+    root = str(repo_root or Path(__file__).resolve().parents[1])
+    try:
+        out = subprocess.run(
+            ["git", "-C", root, "rev-list", f"{baseline}^..HEAD"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if out.returncode != 0:
+            return []
+        return [c[:7] for c in out.stdout.split()]
+    except Exception:
+        return []

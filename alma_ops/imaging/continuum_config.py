@@ -103,6 +103,13 @@ TCLEAN_SHARED: dict = {
     "savemodel":   "none",
 }
 
+# The commit at which continuum output last changed materially -- the nsigma=3
+# stopping criterion above. Products stamped with this commit or any later one
+# are current; anything earlier predates nsigma and needs re-imaging. Used by the
+# project-root reporting/launcher scripts to build their accepted-commit set, so
+# that landing an unrelated commit does not invalidate finished work.
+OUTPUT_BASELINE_COMMIT: str = "ac453d8"
+
 # Default Briggs robust weighting (overridable per job)
 DEFAULT_ROBUST: float = 0.5
 
