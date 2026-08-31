@@ -685,7 +685,7 @@ the algebra harder. Worth remembering for the next math-from-a-vendored-codebase
 
 ---
 
-## Known Constraint: sshfs Working Directory Makes Every Python Startup ~45x Slower
+## Known Constraint: sshfs Working Directory Slows Every Python Startup (load-dependent)
 
 `prefect deploy --all` takes minutes on the VM. The cause is not Prefect, the flow
 files, or the network to the Prefect server — it is the shell's *working directory*
@@ -725,6 +725,38 @@ directory differs.
 
 `prefect deploy --all` then additionally imports all seven flow modules off sshfs to
 resolve their entrypoints, on top of that startup cost.
+
+### Update 2026-08-31: the per-lookup cost is load-dependent, not a fixed property
+
+The numbers above are one bad day, not a constant. Measured again ~14 hours later,
+with the mount untouched — same `fuse.sshfs (rw,nosuid,nodev,relatime,user_id=1000,
+group_id=1000)`, no new caching options:
+
+```
+                        2026-08-30      2026-08-31
+sshfs negative lookup      ~25 ms          1.97 ms      (13x faster)
+prefect --version        112-124 s          4.10 s      (~30x faster)
+local cwd baseline           2.60 s         2.69 s      (unchanged)
+```
+
+Nothing on this side changed. Neither did the ~8000 stat calls Python makes at
+startup; only the cost of each one did.
+
+The giveaway is the network. RTT to ws-uv.canfar.net is 0.412 ms, so the old 25 ms
+per lookup was ~60x the round-trip time — a congested server spending tens of
+milliseconds per request, not a slow link. At 1.97 ms it is ~5x RTT, roughly what a
+healthy FUSE round trip costs.
+
+So the mechanism in this entry is right and the diagnostic method is reusable
+(`strace -f -w -c`, then the same command from a local cwd as a control), but the
+magnitude is a property of CANFAR backend load at the time. Re-measure before
+concluding anything is wrong; the three mitigations below are much less compelling
+at 2 ms than they were at 25 ms.
+
+This probably also explains the CANFAR client's ReadTimeouts noted below. Both the
+filesystem and the session API cross the same link to the same site, and both
+misbehaved on 2026-08-30 — sessions took over 150 s to appear in the session list
+that day, and submissions were near-instant the next.
 
 ### What is *not* established
 

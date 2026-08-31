@@ -79,12 +79,17 @@ sshfs \
 
 The `reconnect,ServerAliveInterval=15,ServerAliveCountMax=10` options are load-bearing, not optional extras — without them the mount silently drops on any network blip, and every script reading `/home/ubuntu/canfar_arc/...` starts failing until it's manually remounted. `ServerAliveInterval=15` sends a keepalive every 15s; `ServerAliveCountMax=10` tolerates up to 10 missed keepalives (~150s) before giving up; `reconnect` then re-establishes the mount automatically rather than leaving it dead.
 
-Be aware that *running commands from* a directory under this mount is expensive, not just
-reading files from it. A path lookup on the mount costs ~16 ms, and Python startup performs
-thousands of them, so `prefect --version` takes ~2.6 s from `/mnt/pspace` and ~120 s from
-`alma-sails-codebase/flows` — same venv, same command, only the working directory differs.
-This is why `prefect deploy --all` takes minutes. See DEVLOG.md, "Known Constraint: sshfs
-Working Directory Makes Every Python Startup ~45x Slower".
+Be aware that *running commands from* a directory under this mount can be expensive, not
+just reading files from it. Python startup performs thousands of path lookups, and each one
+resolved against the mount is a network round trip, so the working directory alone can
+dominate runtime — `prefect --version` has been measured at 2.6 s from `/mnt/pspace` and
+112–124 s from `alma-sails-codebase/flows`, same venv, same command.
+
+How bad this gets depends on CANFAR backend load, not on the mount: the same lookup measured
+25 ms on 2026-08-30 and 1.97 ms the next day with nothing changed on this side. If `prefect
+deploy --all` suddenly takes minutes, that is the thing to check rather than assume. See
+DEVLOG.md, "Known Constraint: sshfs Working Directory Slows Every Python Startup
+(load-dependent)", for the measurement method.
 
 ### CANFAR Authentication
 
