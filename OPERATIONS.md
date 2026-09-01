@@ -91,6 +91,70 @@ deploy --all` suddenly takes minutes, that is the thing to check rather than ass
 DEVLOG.md, "Known Constraint: sshfs Working Directory Slows Every Python Startup
 (load-dependent)", for the measurement method.
 
+### Making canonical `/arc` paths resolve on the VM
+
+The database stores every path in canonical `/arc/projects/ALMA-SAILS/...` form, which the
+VM cannot resolve — it mounts the same storage at `/home/ubuntu/canfar_arc`. One symlink
+removes the difference:
+
+```bash
+sudo ln -s /home/ubuntu/canfar_arc /arc
+```
+
+The sshfs mount root mirrors CANFAR's layout exactly (`home/`, `projects/`, `share/`), so a
+single link at `/` covers all three. This does not replace `db.to_local()` /
+`db.to_canonical()` — headless jobs still need those — it just means a canonical path
+copied out of the database also works when pasted into a VM shell.
+
+It is also what makes `astro_latest_venv` (below) usable from the VM, since that venv's
+interpreter symlink is a canonical path.
+
+A symlink stores a path string, not a mount reference, so unmounting and remounting sshfs
+does nothing to it: while the mount is down `/arc/projects/...` returns `No such file or
+directory` exactly as `/home/ubuntu/canfar_arc/projects/...` does, and both work again on
+the next access after remounting. It never needs recreating, and survives reboots. The one
+cost is that anything walking the filesystem from `/` (a bare `find /`, `updatedb`, a
+backup agent, an IDE indexer) can now reach the sshfs by a second route and may traverse it
+twice. `sudo rm /arc` reverses it with no other effect.
+
+### Shared Python environment (`astro_latest_venv`)
+
+`/arc/projects/ALMA-SAILS/astro_latest_venv` holds an up-to-date scientific Python stack —
+astropy, matplotlib, spectral-cube, radio-beam, numpy, scipy, pandas, pillow, reproject,
+regions, photutils, astroquery, alminer — for analysis and plotting scripts that need
+current versions rather than whatever a CASA container happens to bundle.
+
+```bash
+/arc/projects/ALMA-SAILS/astro_latest_venv/bin/python your_script.py
+```
+
+Unlike `structure_id_env/`, it works from the VM *and* from CANFAR containers. That venv was
+built against a CASA container's Python 3.10 and its interpreter symlink is unusable from
+the VM's 3.12; a venv is bound to the interpreter it was built from, so building against any
+system Python breaks it in the other environment.
+
+This one sidesteps the problem by owning its interpreter: `uv` installs a standalone
+CPython 3.12.12 under `/arc/projects/ALMA-SAILS/tools/python/`, on shared storage, so the
+venv depends on no system Python anywhere.
+
+Built with the bundled `uv` (`/arc/projects/ALMA-SAILS/tools/uv`), **from a container
+terminal** — writing tens of thousands of small files to `/arc` over the VM's sshfs is
+extremely slow:
+
+```bash
+export UV_PYTHON_INSTALL_DIR=/arc/projects/ALMA-SAILS/tools/python
+UV=/arc/projects/ALMA-SAILS/tools/uv
+$UV python install 3.12
+$UV venv /arc/projects/ALMA-SAILS/astro_latest_venv --python 3.12 --relocatable
+$UV pip install --python /arc/projects/ALMA-SAILS/astro_latest_venv/bin/python <packages>
+```
+
+`--relocatable` matters: it makes the console scripts resolve their interpreter relatively,
+so the venv works whether reached as `/arc/...` or `/home/ubuntu/canfar_arc/...`.
+
+Importing the full stack from sshfs takes minutes on a cold first run. That is mount
+latency, not breakage — see DEVLOG.md's note on sshfs lookup cost.
+
 ### CANFAR Authentication
 
 Launching CANFAR headless sessions (Kueue jobs) from the VM — rather than from inside an interactive CANFAR session, where auth is handled automatically — needs an explicit login:
