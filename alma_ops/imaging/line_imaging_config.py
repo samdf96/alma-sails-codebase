@@ -48,10 +48,24 @@ TCLEAN_LINE_IMAGING_SHARED: dict = {
     "outframe":    "LSRK",
     "veltype":     "radio",
     "pbcor":       False,      # impbcor applied as a separate step, same as continuum
-    "niter":       10000,
+    # Raised from 10000 alongside nsigma below. On its own a larger budget would
+    # just clean deeper into the noise; nsigma is what stops each cube at its own
+    # noise level, and the budget is only consumed by cubes that need it to get
+    # there. Measured on three cubes at niter=10000: det 1433 spent the whole
+    # budget reaching 0.26 sigma (over-cleaned across 54 major cycles), while
+    # det 435 and det 461 hit the limit still at 9.4 and 14.9 sigma with
+    # auto-multithresh actively expanding the mask -- genuinely under-cleaned.
+    "niter":       50000,
     "gain":        0.1,
     "cyclefactor": 2.0,
-    "threshold":   "0.0mJy",   # masking drives stopping, not threshold
+    "threshold":   "0.0mJy",   # superseded by nsigma; stop is max(threshold, nsigma*rms)
+    # Per-channel for a cube, so each plane stops at its own noise rather than a
+    # cube-wide value -- the per-channel rms varies by 1.7-3.3x across the cubes
+    # measured here.
+    "nsigma":      3.0,
+    # As for the continuum: with nsigma setting the stopping point, a MAD noise
+    # estimate biased by bright emission would stop the clean in the wrong place.
+    "fastnoise":   False,
     "usemask":     "auto-multithresh",
     "interactive": False,
     "savemodel":   "none",

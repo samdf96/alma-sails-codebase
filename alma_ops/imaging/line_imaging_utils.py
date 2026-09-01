@@ -456,7 +456,14 @@ def run_line_imaging(
         "imsize":    [imsize, imsize],
         "cell":      cell_str,
         "start":     f"{lo_ghz:.10f}GHz",
-        "width":     f"{native_chanwidth_hz:.2f}Hz",
+        # Empty rather than a formatted native_chanwidth_hz: we want the MS's own
+        # channel grid, and reconstructing it through a decimal string can land a
+        # fraction of a hertz below the true width. CASA then reads that as a
+        # request to make channels finer than the data supports and refuses with
+        # "calcChanFreqs failed, check input start and width parameters" (det 1433,
+        # native 976562.5 Hz rendered as 976562 Hz). nchan below is still derived
+        # from native_chanwidth_hz, so the window spanned is unchanged.
+        "width":     "",
         "nchan":     nchan,
         "restfreq":  [f"{frequency_ghz:.6f}GHz"],
         "robust":    robust,
