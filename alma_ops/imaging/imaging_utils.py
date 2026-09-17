@@ -277,6 +277,12 @@ def compute_imaging_params(
 
 
 POINTING_MATCH_TOL_ARCSEC = 0.1
+# Largest pointing spread, as a fraction of the primary beam FWHM, that a unit
+# not flagged as a mosaic may be imaged with. Pointings further apart than
+# this barely overlap, so they are not one source seen by different projects
+# but different sky under one name -- which is how a wrong field selection or
+# a name reused for two positions shows up.
+MAX_AUTO_MOSAIC_SPREAD_PB = 0.5
 
 
 def resolve_field_ids(msmd, selection, ms_path) -> list:
@@ -349,6 +355,39 @@ def max_pointing_separation_arcsec(selection_by_ms: dict) -> float:
                  + math.cos(dec1) * math.cos(dec2) * math.sin((ra2 - ra1) / 2) ** 2)
             worst = max(worst, math.degrees(2 * math.asin(min(1.0, math.sqrt(h)))) * 3600)
     return worst
+
+
+def primary_beam_fwhm_arcsec(ms_paths) -> float:
+    """Primary beam FWHM (1.13 lambda/D) at the lowest mean SPW frequency.
+
+    Same frequency and dish choice as compute_imaging_params' image sizing,
+    so the pointing-spread limit and the image extent agree on the beam.
+    """
+    import casatools
+    import numpy as np
+
+    C_MS = 299_792_458.0
+    min_mean_freq_hz = float("inf")
+    antenna_diam_m = None
+    msmd = casatools.msmetadata()
+    for ms_path in ms_paths:
+        msmd.open(str(ms_path))
+        try:
+            freqs = [msmd.meanfreq(spw=i) for i in range(msmd.nspw()) if msmd.nchan(i) > 0]
+            if freqs:
+                min_mean_freq_hz = min(min_mean_freq_hz, float(np.mean(freqs)))
+            if antenna_diam_m is None:
+                try:
+                    vals = [v["value"] for v in msmd.antennadiameter().values() if v["value"] > 0]
+                    if vals:
+                        antenna_diam_m = float(np.median(vals))
+                except Exception:
+                    pass
+        finally:
+            msmd.done()
+    if antenna_diam_m is None:
+        antenna_diam_m = 12.0
+    return math.degrees(1.13 * (C_MS / min_mean_freq_hz) / antenna_diam_m) * 3600.0
 
 
 def compute_mosaic_imaging_params(
@@ -553,7 +592,11 @@ def run_continuum_imaging(
         This is a floor, not the final word: if the selected fields' phase
         centers differ by more than POINTING_MATCH_TOL_ARCSEC across the
         inputs -- typically one source observed by different projects -- the
-        mosaic gridder is used regardless. The gridder actually used is
+        mosaic gridder is used regardless -- unless they differ by more than
+        MAX_AUTO_MOSAIC_SPREAD_PB x the primary beam FWHM, in which case the
+        pointings do not overlap one source and ValueError is raised before
+        tclean runs. A unit passed in with is_mosaic=True is an intentional
+        mosaic and is not subject to that limit. The gridder actually used is
         returned as ``gridder`` in the products dict, alongside
         ``pointing_spread_arcsec``.
     """
@@ -680,7 +723,18 @@ def run_continuum_imaging(
     pointing_spread = max_pointing_separation_arcsec(selection_by_ms)
     print(f"    selected pointings span {pointing_spread:.3f}\"", flush=True)
     if not is_mosaic and pointing_spread > POINTING_MATCH_TOL_ARCSEC:
-        print(f"    pointings differ (> {POINTING_MATCH_TOL_ARCSEC}\") → gridder=mosaic", flush=True)
+        pb_fwhm = primary_beam_fwhm_arcsec(vis_list)
+        limit = MAX_AUTO_MOSAIC_SPREAD_PB * pb_fwhm
+        if pointing_spread > limit:
+            raise ValueError(
+                f"Selected pointings for {field_name} B{band} {config_type} span "
+                f"{pointing_spread:.1f}\", more than {MAX_AUTO_MOSAIC_SPREAD_PB} x the "
+                f"{pb_fwhm:.1f}\" primary beam ({limit:.1f}\"). They do not overlap one "
+                f"source: check the unit's field selection, or whether one field name "
+                f"covers several positions. Not imaging."
+            )
+        print(f"    pointings differ (> {POINTING_MATCH_TOL_ARCSEC}\", within {limit:.1f}\") "
+              f"→ gridder=mosaic", flush=True)
         is_mosaic = True
 
     # 4. Cell size, image size, and (for mosaics) phasecenter from MS metadata
