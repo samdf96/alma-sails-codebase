@@ -276,6 +276,81 @@ def compute_imaging_params(
     return cell_str, imsize
 
 
+POINTING_MATCH_TOL_ARCSEC = 0.1
+
+
+def resolve_field_ids(msmd, selection, ms_path) -> list:
+    """CASA field IDs for a field selection in one open MS.
+
+    Integers are field IDs; strings are always field names, never parsed as
+    IDs -- sources in this survey are genuinely named '211' and '216'.
+
+    Parameters
+    ----------
+    msmd:
+        A casatools.msmetadata already opened on `ms_path`.
+    selection:
+        List of field IDs (int) and/or field names (str).
+    ms_path:
+        Used only in the error message.
+
+    Returns
+    -------
+    list[int]
+    """
+    fids = []
+    for entry in selection:
+        if isinstance(entry, str):
+            try:
+                matched = list(msmd.fieldsforname(entry))
+            except Exception:
+                matched = []
+            if not matched:
+                raise ValueError(f"Field '{entry}' not found in {ms_path}")
+            fids.extend(int(f) for f in matched)
+        else:
+            fids.append(int(entry))
+    return fids
+
+
+def max_pointing_separation_arcsec(selection_by_ms: dict) -> float:
+    """Largest angular separation between the selected fields' phase centers.
+
+    Parameters
+    ----------
+    selection_by_ms:
+        {str(ms_path): [field, ...]} as accepted by resolve_field_ids.
+
+    Returns
+    -------
+    float
+        0.0 when every selected field, across every MS, shares one pointing.
+    """
+    import casatools
+
+    centers = []
+    msmd = casatools.msmetadata()
+    for ms_path, selection in selection_by_ms.items():
+        msmd.open(str(ms_path))
+        try:
+            for fid in resolve_field_ids(msmd, selection, ms_path):
+                pc = msmd.phasecenter(fid)
+                centers.append((pc["m0"]["value"], pc["m1"]["value"]))
+        finally:
+            msmd.done()
+
+    worst = 0.0
+    for i in range(len(centers)):
+        ra1, dec1 = centers[i]
+        for ra2, dec2 in centers[i + 1:]:
+            # Haversine: the acos form loses precision at the sub-arcsecond
+            # separations POINTING_MATCH_TOL_ARCSEC has to resolve.
+            h = (math.sin((dec2 - dec1) / 2) ** 2
+                 + math.cos(dec1) * math.cos(dec2) * math.sin((ra2 - ra1) / 2) ** 2)
+            worst = max(worst, math.degrees(2 * math.asin(min(1.0, math.sqrt(h)))) * 3600)
+    return worst
+
+
 def compute_mosaic_imaging_params(
     ms_paths,
     field_name: str,
@@ -314,12 +389,18 @@ def compute_mosaic_imaging_params(
         Margin added around the pointing footprint, as a multiple of the
         single-pointing primary beam FWHM diameter.
     field_ids_by_ms:
-        Optional {str(ms_path): [field_id, ...]} override. When an ms_path
-        has an entry here, those exact field IDs are used instead of
+        Optional {str(ms_path): [field, ...]} override. When an ms_path
+        has an entry here, those exact fields are used instead of
         resolving field_name via msmd.fieldsforname — needed when an
         imaging unit images only a subset of pointings out of a
         shared-name mosaic MOUS (e.g. one field absorbed into a
         single-pointing canonical source during clustering).
+
+        Entries may be integer field IDs or field names. Prefer names for
+        re-fielded mosaics: a field ID is a positional index into one MS's
+        FIELD table, so it silently means a different pointing wherever that
+        ordering differs from whatever numbering the caller took it from,
+        while SMSS_<N>-style names are carried in the FIELD table itself.
 
     Returns
     -------
@@ -347,9 +428,8 @@ def compute_mosaic_imaging_params(
     for ms_path in ms_paths:
         msmd.open(str(ms_path))
         try:
-            fids = (field_ids_by_ms or {}).get(str(ms_path))
-            if fids is None:
-                fids = msmd.fieldsforname(field_name)
+            selection = (field_ids_by_ms or {}).get(str(ms_path)) or [field_name]
+            fids = resolve_field_ids(msmd, selection, ms_path)
             for fid in fids:
                 pc = msmd.phasecenter(fid)
                 ra_vals.append(pc["m0"]["value"])
@@ -453,10 +533,12 @@ def run_continuum_imaging(
             canonical/display name (e.g. a clustered source name) that
             differs from the shared mosaic field name actually written into
             the MS and cont.dat.
-          - ``field_ids`` (list[int]): explicit CASA field IDs to select
+          - ``field_ids`` (list[int | str]): explicit CASA fields to select
             from this MOUS, instead of every field sharing
             `source_field_name`. Used when this imaging unit covers only
             one or a few pointings out of a larger shared-name mosaic MOUS.
+            Field names (e.g. 'SMSS_25') are preferred over integer IDs —
+            see compute_mosaic_imaging_params' field_ids_by_ms for why.
     keep_casa_products:
         If False (default), delete all CASA-format tclean intermediates
         (.image, .pb, .psf, .residual, .mask, .model, .sumwt, .image.pbcor)
@@ -467,12 +549,20 @@ def run_continuum_imaging(
         only gathers the visibilities; 'standard' still rephases every
         pointing to one phase center, and a single pointing's primary beam
         only covers one pointing's worth of the image.
+
+        This is a floor, not the final word: if the selected fields' phase
+        centers differ by more than POINTING_MATCH_TOL_ARCSEC across the
+        inputs -- typically one source observed by different projects -- the
+        mosaic gridder is used regardless. The gridder actually used is
+        returned as ``gridder`` in the products dict, alongside
+        ``pointing_spread_arcsec``.
     """
     import os
     import shutil
     from pathlib import Path as _Path
 
     try:
+        import casatools
         from casatasks import exportfits, impbcor, tclean
     except ImportError:
         raise RuntimeError("run_continuum_imaging must be called from inside a CASA session.")
@@ -508,14 +598,14 @@ def run_continuum_imaging(
     spw_list: list = []
     field_list: list = []
     all_ms_paths: list = []
-    field_ids_by_ms: dict = {}
+    selection_by_ms: dict = {}
 
     for entry in mous_list:
         ms_paths          = entry["ms_paths"]
         cont_dat_path     = entry["cont_dat_path"]
         source_field_name = entry.get("source_field_name") or field_name
         field_ids         = entry.get("field_ids")
-        field_selection    = ",".join(str(f) for f in field_ids) if field_ids else source_field_name
+        selection         = list(field_ids) if field_ids else [source_field_name]
 
         print(f"  [cont.dat] {_Path(cont_dat_path).parent.name}", flush=True)
         cont_ranges = parse_cont_dat(cont_dat_path, source_field_name)
@@ -556,13 +646,24 @@ def run_continuum_imaging(
             if not spw_str:
                 print(f"  [WARNING] Empty SPW selection for {ms_path} — skipping.", flush=True)
                 continue
+            # tclean reads any non-negative-integer field string as an index,
+            # so a source genuinely named '211' is only found by name when no
+            # index 211 happens to exist. Resolve against this exact MS and
+            # hand tclean indices, which then cannot be misread.
+            _msmd = casatools.msmetadata()
+            _msmd.open(str(ms_path))
+            try:
+                fids = resolve_field_ids(_msmd, selection, ms_path)
+            finally:
+                _msmd.done()
+            field_str = ",".join(str(f) for f in fids)
             vis_list.append(ms_path)
             spw_list.append(spw_str)
-            field_list.append(field_selection)
+            field_list.append(field_str)
             all_ms_paths.append(ms_path)
-            if field_ids:
-                field_ids_by_ms[str(ms_path)] = field_ids
-            print(f"    {_Path(ms_path).name}  spw: {spw_str}  field: {field_selection}", flush=True)
+            selection_by_ms[str(ms_path)] = fids
+            print(f"    {_Path(ms_path).name}  spw: {spw_str}  "
+                  f"field: {','.join(map(str, selection))} -> index {field_str}", flush=True)
 
     if not vis_list:
         raise ValueError(f"No usable MS/cont.dat pairs for {field_name} B{band} {config_type}.")
@@ -573,19 +674,28 @@ def run_continuum_imaging(
     automask = select_automask(b75)
     print(f"    B75={b75:.0f}m  →  {_automask_label(b75)}", flush=True)
 
-    # 3. Cell size, image size, and (for mosaics) phasecenter from MS metadata
+    # 3. Gridder. Data from different projects rarely share an exact pointing,
+    # and 'standard' rephases everything onto one center while ignoring that
+    # each pointing's primary beam sits somewhere else.
+    pointing_spread = max_pointing_separation_arcsec(selection_by_ms)
+    print(f"    selected pointings span {pointing_spread:.3f}\"", flush=True)
+    if not is_mosaic and pointing_spread > POINTING_MATCH_TOL_ARCSEC:
+        print(f"    pointings differ (> {POINTING_MATCH_TOL_ARCSEC}\") → gridder=mosaic", flush=True)
+        is_mosaic = True
+
+    # 4. Cell size, image size, and (for mosaics) phasecenter from MS metadata
     print("  [params] computing cell size and image size …", flush=True)
     phasecenter = None
     if is_mosaic:
         cell_str, imsize, phasecenter = compute_mosaic_imaging_params(
-            vis_list, field_name, robust=robust, field_ids_by_ms=field_ids_by_ms or None,
+            vis_list, field_name, robust=robust, field_ids_by_ms=selection_by_ms,
         )
         print(f"    cell={cell_str}  imsize={imsize}  gridder=mosaic  phasecenter={phasecenter}", flush=True)
     else:
         cell_str, imsize = compute_imaging_params(vis_list, robust=robust)
         print(f"    cell={cell_str}  imsize={imsize}  gridder=standard", flush=True)
 
-    # 4. tclean
+    # 5. tclean
     img_base = os.path.join(imaging_dir, f"{field_name}_B{band}_{config_type}_rob{robust:.1f}_cont")
 
     tclean_params = dict(TCLEAN_SHARED)
@@ -616,7 +726,7 @@ def run_continuum_imaging(
     finally:
         os.chdir(_orig_dir)
 
-    # 5. Primary beam correction
+    # 6. Primary beam correction
     image_path       = img_base + ".image"
     pbcor_image      = img_base + ".image.pbcor"
     image_fits_path  = img_base + ".image.fits"
@@ -630,7 +740,7 @@ def run_continuum_imaging(
         overwrite=True,
     )
 
-    # 6. Export FITS for both image and pbcor
+    # 7. Export FITS for both image and pbcor
     print(f"  [exportfits] → {image_fits_path}", flush=True)
     exportfits(
         imagename=image_path,
@@ -649,7 +759,7 @@ def run_continuum_imaging(
         overwrite=True,
     )
 
-    # 7. Clean up CASA-format intermediates (kept only when explicitly requested)
+    # 8. Clean up CASA-format intermediates (kept only when explicitly requested)
     _CASA_SUFFIXES = [
         ".image", ".image.pbcor", ".mask", ".model",
         ".pb", ".psf", ".residual", ".sumwt", ".weight",
@@ -667,6 +777,8 @@ def run_continuum_imaging(
         "image_fits":           image_fits_path,
         "image_pbcor_fits":     pbcor_fits_path,
         "casa_products_cleaned": not keep_casa_products,
+        "gridder":              "mosaic" if is_mosaic else "standard",
+        "pointing_spread_arcsec": round(pointing_spread, 3),
     }
     if phasecenter is not None:
         result["phasecenter"] = phasecenter

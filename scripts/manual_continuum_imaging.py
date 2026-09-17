@@ -235,7 +235,6 @@ def main() -> None:
     # --- DB: advance to complete ---
     products_entry = dict(products)
     products_entry["robust"] = args.robust
-    products_entry["gridder"] = "mosaic" if is_mosaic else "standard"
     products_entry["completed_at"] = datetime.now(timezone.utc).isoformat()
     # Which code produced this product. Lets a later query tell pre- from
     # post-fix products directly instead of inferring it from timestamps.

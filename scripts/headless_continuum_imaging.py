@@ -115,7 +115,6 @@ def main() -> None:
 
     products_entry = dict(products)
     products_entry["robust"] = robust
-    products_entry["gridder"] = "mosaic" if is_mosaic else "standard"
     products_entry["completed_at"] = datetime.now(timezone.utc).isoformat()
     # Which code produced this product. batch_continuum_reimage.py decides what
     # is still outstanding by looking for a post-fix commit here -- without it

@@ -207,7 +207,6 @@ def main() -> None:
             )
             products_entry = dict(products)
             products_entry["robust"] = args.robust
-            products_entry["gridder"] = "mosaic" if is_mosaic else "standard"
             products_entry["completed_at"] = datetime.now(timezone.utc).isoformat()
 
             conn = db.get_connection(args.db_path)
