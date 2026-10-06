@@ -33,6 +33,8 @@ class SplitResult:
     source_names: list[str]
     duration_s: float
     spw_map: dict = field(default_factory=dict)  # {original_spw_int: new_index_int}
+    # EBs may number their SPWs differently; one map per MS basename
+    spw_map_by_ms: dict = field(default_factory=dict)
     error: str | None = None
 
 

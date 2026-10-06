@@ -16,6 +16,7 @@ Usage (inside a CASA interactive container):
 
 Optional:
     --datacolumn corrected        (override auto-detection)
+    --keep-originals              (do not delete the calibrated MSes after splitting)
     --logfile /path/to/casa.log  (override auto-generated log path in MOUS directory)
     --db-path /path/to/db
 """
@@ -31,7 +32,8 @@ import argparse
 
 from alma_ops import db
 from alma_ops.config import DB_PATH
-from alma_ops.split import run_split
+from alma_ops.split import (_find_calibrated_ms, check_spw_consistency,
+                            format_spw_report, run_split)
 
 
 def main(
@@ -40,6 +42,7 @@ def main(
     db_path: Path,
     logfile: str | None = None,
     spw_override: str | None = None,
+    keep_originals: bool = False,
 ) -> None:
     conn = db.get_connection(db_path)
 
@@ -94,11 +97,38 @@ def main(
     log_path = Path(logfile) if logfile else mous_directory / f"casa-{datetime.now().strftime('%Y%m%d-%H%M%S')}-split.log"
     casalog.setlogfile(str(log_path))  # noqa: F821 — casalog is a CASA global
 
+    # ------------------------------------------------------------------
+    # SPW pre-flight. Execution blocks within one MOUS may number their
+    # spectral windows differently, and the neighbouring numbers are valid
+    # 1-channel CH_AVG windows, so splitting the wrong ones does not raise --
+    # it quietly writes almost no data. Check before anything is created, and
+    # stop here rather than recording a failure, since nothing was attempted.
+    # ------------------------------------------------------------------
+    if spw_override:
+        print("[manual-split] SPW override active — skipping per-MS SPW resolution")
+        plan = None
+    else:
+        calibrated = _find_calibrated_ms(mous_directory)
+        if not calibrated:
+            print(f"[ERROR] no calibrated .ms files found in {mous_directory}")
+            sys.exit(1)
+        plan = check_spw_consistency(calibrated, expected_spws=spws)
+        print(format_spw_report(plan))
+        if plan["problems"]:
+            print()
+            print("[ABORT] The measurement sets for this MOUS do not agree on their")
+            print("        science spectral windows, so a single SPW selection cannot")
+            print("        be correct for all of them. Nothing was split and the state")
+            print("        is unchanged — this needs a look before proceeding.")
+            print("        To force a specific selection anyway, re-run with --spw.")
+            sys.exit(1)
+
     print(f"[manual-split] MOUS {mous_id} confirmed downloaded")
     print(f"[manual-split] MOUS directory: {mous_directory}")
     print(f"[manual-split] Science SPWs:   {spws}{' (override)' if spw_override else ''}")
     print(f"[manual-split] Target fields:  {field_names}")
     print(f"[manual-split] Data column:    {datacolumn}")
+    print(f"[manual-split] Originals:      {'kept' if keep_originals else 'deleted after split'}")
     print(f"[manual-split] CASA log:       {log_path}")
 
     # ------------------------------------------------------------------
@@ -111,6 +141,8 @@ def main(
         spws=spws,
         field_names=field_names,
         datacolumn=datacolumn,
+        keep_originals=keep_originals,
+        resolve_spws=not spw_override,
     )
 
     # ------------------------------------------------------------------
@@ -134,7 +166,13 @@ def main(
             "field_names":      field_names,
             "spws_original":    spws,
             "spw_map":          result.spw_map,
+            "spw_map_by_ms":    result.spw_map_by_ms,
+            "spws_resolved_per_ms": (
+                {k: v for k, v in
+                 ((ms.name, sp) for ms, sp in plan["per_ms"].items())} if plan else None),
+            "spw_numbering_differs": bool(plan and plan["renumbered"]),
             "datacolumn":       datacolumn,
+            "keep_originals":   keep_originals,
             "spw_override":     spw_override,
             "n_input_ms":       len(result.split_products),
             "duration_s":       result.duration_s,
@@ -143,7 +181,12 @@ def main(
     )
 
     print(f"[manual-split] Split complete in {result.duration_s:.1f}s")
-    print(f"[manual-split] SPW map (original → new index): {result.spw_map}")
+    if result.spw_map_by_ms and len(set(map(str, result.spw_map_by_ms.values()))) > 1:
+        print("[manual-split] SPW maps (original → new index), per MS:")
+        for name, m in result.spw_map_by_ms.items():
+            print(f"         {name}: {m}")
+    else:
+        print(f"[manual-split] SPW map (original → new index): {result.spw_map}")
     print(f"[manual-split] Products ({len(result.split_products)}):")
     for p in result.split_products:
         print(f"         {p}")
@@ -174,6 +217,10 @@ if __name__ == "__main__":
     parser.add_argument("--logfile",     default=None,      help="CASA log file path (default: auto-generated in MOUS directory)")
     parser.add_argument("--db-path",     default=DB_PATH,   help="Path to the SQLite database")
     parser.add_argument("--spw",         default=None,      help="Comma-separated SPW IDs to override alminer metadata (e.g. '21,23,25,27,29')")
+    parser.add_argument("--keep-originals", action="store_true",
+                        help="Leave the calibrated MSes in place instead of deleting them after a "
+                             "successful split. Use when they are the only copy, or until the split "
+                             "output has been verified")
     args = parser.parse_args()
 
     main(
@@ -182,4 +229,5 @@ if __name__ == "__main__":
         logfile=args.logfile,
         db_path=Path(args.db_path),
         spw_override=args.spw,
+        keep_originals=args.keep_originals,
     )
