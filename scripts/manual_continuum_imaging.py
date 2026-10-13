@@ -64,6 +64,12 @@ def main() -> None:
     parser.add_argument("--force", action="store_true",
                         help="Delete existing products for this robust value and re-image")
     parser.add_argument("--dry-run", action="store_true", help="Print plan without running tclean")
+    parser.add_argument("--ncores", type=int, default=None,
+                        help="Number of cores this run was launched with. Only has an "
+                             "effect when the script is itself run under mpicasa, e.g. "
+                             "'mpicasa -n 4 casa -c manual_continuum_imaging.py --ncores 4 ...'; "
+                             "tclean's parallel mode is selected by detecting MPI, not by "
+                             "this flag, so passing it without mpicasa only produces a warning")
     parser.add_argument("--keep-casa-products", action="store_true",
                         help="Keep CASA-format intermediates after FITS export (default: delete them)")
     parser.add_argument("--db-path", default=str(DB_PATH), help="Path to serpens_v2.db")
@@ -204,6 +210,24 @@ def main() -> None:
 
     os.makedirs(img_dir, exist_ok=True)
 
+    # tclean only parallelises when the process is actually running under MPI,
+    # which means being launched by mpicasa -- a plain `casa -c` is one process
+    # and passing parallel=True there would be a lie to tclean. So ask the
+    # runtime rather than trusting --ncores, the same way manual_selfcal.sh does.
+    try:
+        from casampi.MPIEnvironment import MPIEnvironment
+        parallel = bool(MPIEnvironment.is_mpi_enabled)
+    except Exception:
+        parallel = False
+    if args.ncores and args.ncores > 1 and not parallel:
+        print(f"[WARNING] --ncores {args.ncores} given but this process is not under MPI; "
+              f"tclean will run single-threaded. Relaunch as:")
+        print(f"          mpicasa -n {args.ncores} casa -c {Path(__file__).name} ...")
+    elif parallel and not args.ncores:
+        print("[imaging] running under mpicasa -- tclean parallel mode enabled")
+    print(f"[imaging] parallel        : {parallel}"
+          + (f"  (--ncores {args.ncores})" if args.ncores else ""))
+
     # --- Run imaging ---
     try:
         from alma_ops.imaging.imaging_utils import run_continuum_imaging
@@ -216,6 +240,7 @@ def main() -> None:
             mous_list=mous_list,
             keep_casa_products=args.keep_casa_products,
             is_mosaic=is_mosaic,
+            parallel=parallel,
         )
     except Exception:
         err = traceback.format_exc()
