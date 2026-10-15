@@ -347,7 +347,9 @@ def run_line_triage_imaging(
         "imsize":    [imsize, imsize],
         "cell":      cell_str,
         "start":     tclean_start,
-        "width":     str(bin_factor),
+        # Must be an int: tclean silently ignores a unitless string ('3') and
+        # keeps native channels, so nchan above would cover only 1/bin of the spw.
+        "width":     bin_factor,
         "nchan":     tclean_nchan,
     })
 
