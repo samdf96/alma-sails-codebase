@@ -87,7 +87,7 @@ def mark_selfcal_running(mous_id: str, db_path: str) -> None:
 
 @task(name="launch-selfcal-session", retries=2, retry_delay_seconds=60)
 def launch_selfcal_session(
-    mous_id: str, db_path: str, ncores: Optional[int], ram_gb: Optional[int], use_staging: bool,
+    mous_id: str, db_path: str, ncores: Optional[int], ram_gb: Optional[int],
 ) -> str:
     """Submit a CASA pipeline headless session to run autoselfcal.
 
@@ -110,7 +110,7 @@ def launch_selfcal_session(
     if ram_gb is not None:
         kwargs["ram"] = ram_gb
 
-    session = make_session(use_staging)
+    session = make_session()
     result = create_checked(session, unit_key, **kwargs)
 
     mode_desc = resource_desc(ncores, ram_gb)
@@ -122,7 +122,6 @@ def selfcal_mous_flow(
     mous_id: str,
     ncores: Optional[int] = _DEFAULT_NCORES,
     ram_gb: Optional[int] = _DEFAULT_RAM_GB,
-    use_staging: bool = False,
     db_path: Optional[str] = None,
 ) -> None:
     """Run autoselfcal on a split MOUS via a CANFAR headless session.
@@ -138,8 +137,6 @@ def selfcal_mous_flow(
     ram_gb:
         RAM in GB to allocate to the headless session (default 16). Ignored
         in flexible mode.
-    use_staging:
-        If True, submit the headless session to the CANFAR staging cluster.
     db_path:
         Path to the pipeline SQLite database (defaults to config.DB_PATH).
     """
@@ -152,7 +149,7 @@ def selfcal_mous_flow(
     mark_selfcal_running(mous_id, db_path)
 
     try:
-        launch_selfcal_session(mous_id, db_path, ncores, ram_gb, use_staging)
+        launch_selfcal_session(mous_id, db_path, ncores, ram_gb)
     except Exception as e:
         logger.error(f"[{mous_id}] Session launch failed — recording failure: {e}")
         conn = db.get_connection(db_path)
@@ -177,7 +174,6 @@ if __name__ == "__main__":
     parser.add_argument("--ncores",      type=int, default=_DEFAULT_NCORES,   help=f"MPI cores (default {_DEFAULT_NCORES}); pass 0 for flexible mode (no cores/RAM pinned, no mpicasa)")
     parser.add_argument("--ram-gb",      type=int, default=_DEFAULT_RAM_GB,   help=f"RAM in GB (default {_DEFAULT_RAM_GB})")
     parser.add_argument("--db-path",     default=None,                        help="Path to the SQLite database")
-    parser.add_argument("--use-staging", action="store_true",                  help="Submit to CANFAR staging cluster")
     args = parser.parse_args()
 
     selfcal_mous_flow(
@@ -185,5 +181,4 @@ if __name__ == "__main__":
         ncores=args.ncores,
         ram_gb=args.ram_gb,
         db_path=args.db_path,
-        use_staging=args.use_staging,
     )

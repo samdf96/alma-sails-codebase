@@ -54,7 +54,6 @@ def validate_downloaded_state(mous_id: str, db_path: str) -> None:
 def launch_split_session(
     mous_id: str,
     db_path: str,
-    use_staging: bool,
     spw_override: Optional[str] = None,
 ) -> str:
     """Submit a CASA pipeline headless session to run the split."""
@@ -67,7 +66,7 @@ def launch_split_session(
     if spw_override:
         args = f"{args} {spw_override}"
 
-    session = make_session(use_staging)
+    session = make_session()
     result = create_checked(
         session,
         unit_key,
@@ -83,7 +82,6 @@ def launch_split_session(
 @flow(name="split-mous", log_prints=True)
 def split_mous_flow(
     mous_id: str,
-    use_staging: bool = False,
     db_path: Optional[str] = None,
     spw_override: Optional[str] = None,
 ) -> None:
@@ -93,8 +91,6 @@ def split_mous_flow(
     ----------
     mous_id:
         MOUS ID in database form (uid://A001/...).
-    use_staging:
-        If True, submit the headless session to the CANFAR staging cluster.
     db_path:
         Path to the pipeline SQLite database (defaults to config.DB_PATH).
     spw_override:
@@ -105,7 +101,7 @@ def split_mous_flow(
     db_path = db_path or str(DB_PATH)
 
     validate_downloaded_state(mous_id, db_path)
-    launch_split_session(mous_id, db_path, use_staging, spw_override)
+    launch_split_session(mous_id, db_path, spw_override)
 
 
 if __name__ == "__main__":
@@ -116,13 +112,11 @@ if __name__ == "__main__":
     )
     parser.add_argument("--mous-id",     required=True,       help="MOUS ID (uid://A001/...)")
     parser.add_argument("--db-path",     default=None,        help="Path to the SQLite database")
-    parser.add_argument("--use-staging", action="store_true", help="Submit to CANFAR staging cluster")
     parser.add_argument("--spw",         default=None,        help="Comma-separated SPW ID override, e.g. '21,23,25,27,29'")
     args = parser.parse_args()
 
     split_mous_flow(
         mous_id=args.mous_id,
         db_path=args.db_path,
-        use_staging=args.use_staging,
         spw_override=args.spw,
     )

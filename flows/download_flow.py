@@ -60,14 +60,14 @@ def store_download_url(mous_id: str, srdp_url: str, db_path: str) -> None:
 
 
 @task(name="launch-download-session", retries=2, retry_delay_seconds=60)
-def launch_download_session(mous_id: str, srdp_url: str, db_path: str, use_staging: bool) -> str:
+def launch_download_session(mous_id: str, srdp_url: str, db_path: str) -> str:
     """Submit a c-astroml headless session to run the download."""
     logger = get_run_logger()
 
     canonical_db_path = db.to_canonical(db_path)
     unit_key = key_download(mous_id)
 
-    session = make_session(use_staging)
+    session = make_session()
     result = create_checked(
         session,
         unit_key,
@@ -83,7 +83,6 @@ def launch_download_session(mous_id: str, srdp_url: str, db_path: str, use_stagi
 def download_mous_flow(
     mous_id: str,
     srdp_url: str,
-    use_staging: bool = False,
     db_path: Optional[str] = None,
 ) -> None:
     """Download a single MOUS from the NRAO SRDP service via a CANFAR headless session.
@@ -94,8 +93,6 @@ def download_mous_flow(
         MOUS ID in database form (uid://A001/...).
     srdp_url:
         Direct URL to the SRDP data product directory.
-    use_staging:
-        If True, submit the headless session to the CANFAR staging cluster.
     db_path:
         Path to the pipeline SQLite database (defaults to config.DB_PATH).
     """
@@ -103,7 +100,7 @@ def download_mous_flow(
 
     validate_pending_state(mous_id, db_path)
     store_download_url(mous_id, srdp_url, db_path)
-    launch_download_session(mous_id, srdp_url, db_path, use_staging)
+    launch_download_session(mous_id, srdp_url, db_path)
 
 
 if __name__ == "__main__":

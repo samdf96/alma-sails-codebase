@@ -88,7 +88,6 @@ def launch_admit_lineid_session(
     db_path: str,
     force: bool,
     ram_gb: Optional[int],
-    use_staging: bool,
 ) -> str:
     """Submit a CASA pipeline headless session to run ADMIT line identification.
 
@@ -107,7 +106,7 @@ def launch_admit_lineid_session(
     if ram_gb is not None:
         kwargs["ram"] = ram_gb
 
-    session = make_session(use_staging)
+    session = make_session()
     result = create_checked(session, unit_key, **kwargs)
 
     mode_desc = "flexible mode" if ram_gb is None else f"{ram_gb} GB RAM pinned"
@@ -121,7 +120,6 @@ def admit_lineid_flow(
     spw: int,
     force: bool = False,
     ram_gb: Optional[int] = None,
-    use_staging: bool = False,
     db_path: Optional[str] = None,
 ) -> None:
     """Run ADMIT line identification for one line-triage unit via a CANFAR headless session.
@@ -140,15 +138,13 @@ def admit_lineid_flow(
         RAM in GB to pin on the headless session. None (default) is flexible
         mode -- no cores/RAM pinned. Never pins cores; ADMIT has no
         MPI/parallel awareness.
-    use_staging:
-        If True, submit the headless session to the CANFAR staging cluster.
     db_path:
         Path to the pipeline SQLite database (defaults to config.DB_PATH).
     """
     db_path = db_path or str(DB_PATH)
 
     validate_admit_ready(mous_id, source, spw, db_path)
-    launch_admit_lineid_session(mous_id, source, spw, db_path, force, ram_gb, use_staging)
+    launch_admit_lineid_session(mous_id, source, spw, db_path, force, ram_gb)
 
 
 if __name__ == "__main__":
@@ -164,7 +160,6 @@ if __name__ == "__main__":
     parser.add_argument("--ram-gb",   type=int, default=None,
                         help="Pin this much RAM on the session (default: flexible, no cores/RAM pinned)")
     parser.add_argument("--db-path",  default=None,            help="Path to the SQLite database")
-    parser.add_argument("--use-staging", action="store_true", help="Submit to CANFAR staging cluster")
     args = parser.parse_args()
 
     admit_lineid_flow(
@@ -174,5 +169,4 @@ if __name__ == "__main__":
         force=args.force,
         ram_gb=args.ram_gb,
         db_path=args.db_path,
-        use_staging=args.use_staging,
     )

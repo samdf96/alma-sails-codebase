@@ -13,16 +13,15 @@ The naming and launch guards are only effective if all callers share them --
 a flow that builds its own name cannot see a batch script's running session,
 which is the concurrency hole they exist to close.
 
-The make_session() helper is the single place that controls which CANFAR
-cluster a session is submitted to. Pass use_staging=True to target the
-staging cluster, False for production; the Python Configuration API is used
-to override the active context's server name and URL in-memory — no CLI
-calls, no on-disk config changes. Both branches set the server explicitly:
-use_staging=False must not fall back to whatever the ambient active context
-happens to be, since that can be staging (e.g. a context literally named
-"default" configured with the staging URL) -- see state_transitions/run notes
-around 2026-06-26 for the incident where this silently sent a use_staging=False
-run to staging.
+The make_session() helper is the single place that decides which CANFAR
+server a session is submitted to. It uses the active selection of the user's
+canfar configuration -- or, where no ~/.canfar/config.yaml exists (e.g. inside
+a CANFAR interactive session), the client's built-in X.509 default -- and
+refuses to proceed unless that resolves to the production server URL. It never
+looks anything up by name: context and server names are not stable. A config
+written by `canfar auth login` on one machine has them where a machine with no
+config file does not, and the client itself renamed its default server from
+"CADC-CANFAR" (<= 1.3) to "canfar" (1.4). The URL is what requests go to.
 """
 
 from __future__ import annotations
@@ -42,38 +41,39 @@ from canfar.sessions import Session
 # actually hear the answer; it does not make the server faster.
 HTTP_TIMEOUT_S = 300
 
-_STAGING_CONTEXT_NAME    = "CADC-CANFAR-STAGING"
-_STAGING_SERVER_URL      = "https://staging.canfar.net/skaha"
-_PRODUCTION_CONTEXT_NAME = "CADC-CANFAR"
+_PRODUCTION_SERVER_URL = "https://ws-uv.canfar.net/skaha"
 
 
-def make_session(use_staging: bool = False,
-                 timeout: int = HTTP_TIMEOUT_S) -> Session:
-    """Return a configured CANFAR Session pointing to production or staging.
+def make_session(timeout: int = HTTP_TIMEOUT_S) -> Session:
+    """Return a CANFAR Session on the production server.
 
     Parameters
     ----------
-    use_staging:
-        If True, targets the CANFAR staging cluster. If False (default),
-        explicitly targets production -- never inferred from whichever
-        context happens to be active in the user's canfar config.
     timeout:
         HTTP timeout in seconds. Must be set here, at construction: the httpx
         client is built lazily and then cached, so assigning session.timeout
         after the first request reads back as the new value while the live
         client silently keeps the old one.
+
+    Raises
+    ------
+    RuntimeError
+        If the active selection resolves anywhere other than production.
+        Checked rather than assumed: on 2026-06-26 an ambient context silently
+        sent a run to a different cluster.
     """
     cfg = Configuration()
-    active = cfg.active  # e.g. "CADC-CANFAR" or "default" — read from the user's config file
-
-    if use_staging:
-        server_name, server_url = _STAGING_CONTEXT_NAME, _STAGING_SERVER_URL
-    else:
-        production = cfg.contexts[_PRODUCTION_CONTEXT_NAME]
-        server_name, server_url = production.server.name, production.server.url
-
-    cfg = cfg.set_value(f"contexts.{active}.server.name", server_name)
-    cfg = cfg.set_value(f"contexts.{active}.server.url",  server_url)
+    # .context is the one accessor common to the 1.1-1.3 and 1.4 config models
+    # (1.4 keeps it as a legacy view over its separate authentication/servers).
+    server = cfg.context.server
+    url = str(getattr(server, "url", None) or "").rstrip("/")
+    if url != _PRODUCTION_SERVER_URL:
+        raise RuntimeError(
+            f"The active canfar configuration points at {url or 'no server'} "
+            f"(server name {getattr(server, 'name', None)!r}), not production "
+            f"({_PRODUCTION_SERVER_URL}). Select the production server in the "
+            f"canfar client before launching."
+        )
     return Session(config=cfg, timeout=timeout)
 
 

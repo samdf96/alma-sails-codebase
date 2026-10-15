@@ -25,8 +25,7 @@ deployments:
     Download a MOUS from the NRAO SRDP service via a c-astroml CANFAR headless session.
     The MOUS must be in 'pending' state. Advances to 'downloaded' on success.
   entrypoint: download_flow.py:download_mous_flow
-  parameters:
-    use_staging: false
+  parameters: {}
   schedules: []
   work_pool:
     name: headless-runs
@@ -38,8 +37,7 @@ deployments:
     Split a downloaded MOUS to target-only science SPWs via a CASA pipeline headless session.
     The MOUS must be in 'downloaded' state. Advances to 'split_complete' on success.
   entrypoint: split_flow.py:split_mous_flow
-  parameters:
-    use_staging: false
+  parameters: {}
   schedules: []
   work_pool:
     name: headless-runs
@@ -54,7 +52,6 @@ deployments:
   parameters:
     ncores: 4
     ram_gb: 16
-    use_staging: false
   schedules: []
   work_pool:
     name: headless-runs
@@ -69,7 +66,6 @@ deployments:
   entrypoint: imaging_flow.py:imaging_unit_flow
   parameters:
     robust: 0.5
-    use_staging: false
   schedules: []
   work_pool:
     name: headless-runs
@@ -82,8 +78,7 @@ deployments:
     headless session. The MOUS must be in 'selfcal_complete' state. Classifies spws via
     cont.dat and advances each line_triage_unit to 'complete' on success.
   entrypoint: line_triage_flow.py:line_triage_mous_flow
-  parameters:
-    use_staging: false
+  parameters: {}
   schedules: []
   work_pool:
     name: headless-runs
@@ -97,8 +92,7 @@ deployments:
     Advances line_admit_unit to 'complete' on success; detections written to
     line_admit_detection with review_status='pending'.
   entrypoint: line_admit_flow.py:admit_lineid_flow
-  parameters:
-    use_staging: false
+  parameters: {}
   schedules: []
   work_pool:
     name: headless-runs
@@ -112,8 +106,7 @@ deployments:
     line_imaging_unit to 'complete' on success.
     ncores=null launches in flexible mode; ncores>1 enables parallel tclean.
   entrypoint: line_imaging_flow.py:line_imaging_flow
-  parameters:
-    use_staging: false
+  parameters: {}
   schedules: []
   work_pool:
     name: headless-runs

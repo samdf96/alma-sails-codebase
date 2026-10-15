@@ -51,8 +51,7 @@ _PARALLEL_RAM_GB = 16  # default RAM when ncores > 1 and ram_gb not specified
 
 
 @task(name="check-unit-not-running")
-def check_unit_not_running(source: str, band: str, config: str, robust: float,
-                           use_staging: bool) -> None:
+def check_unit_not_running(source: str, band: str, config: str, robust: float) -> None:
     """Abort if a CANFAR session is already imaging this unit.
 
     Runs before validate_imaging_ready, which deletes existing products under
@@ -62,7 +61,7 @@ def check_unit_not_running(source: str, band: str, config: str, robust: float,
     """
     logger = get_run_logger()
     unit_key = key_imaging(source, band, config, robust)
-    ensure_unit_free(make_session(use_staging), unit_key)
+    ensure_unit_free(make_session(), unit_key)
     logger.info(f"[{source} B{band} {config}] No session running on {unit_key}")
 
 
@@ -183,7 +182,6 @@ def launch_imaging_session(
     robust: float,
     ncores: Optional[int],
     ram_gb: Optional[int],
-    use_staging: bool,
 ) -> str:
     """Submit the headless CASA imaging session to CANFAR.
 
@@ -193,7 +191,7 @@ def launch_imaging_session(
     logger = get_run_logger()
 
     unit_key = key_imaging(source, band, config, robust)
-    session  = make_session(use_staging)
+    session  = make_session()
 
     _stdout = io.StringIO()
     _stderr = io.StringIO()
@@ -238,7 +236,6 @@ def imaging_unit_flow(
     ncores: Optional[int] = None,
     ram_gb: Optional[int] = None,
     force: bool = False,
-    use_staging: bool = False,
     db_path: Optional[str] = None,
 ) -> None:
     """Run continuum imaging for one imaging unit via a CANFAR headless session.
@@ -264,8 +261,6 @@ def imaging_unit_flow(
         ncores > 1 and not specified.
     force:
         If True, delete existing products for the given robust value and re-image.
-    use_staging:
-        If True, submit to the CANFAR staging cluster.
     db_path:
         Path to serpens_v2.db (defaults to config.DB_PATH).
     """
@@ -273,14 +268,14 @@ def imaging_unit_flow(
     db_path = db_path or str(DB_PATH)
     run_id  = str(uuid.uuid4())
 
-    check_unit_not_running(source, band, config, robust, use_staging)
+    check_unit_not_running(source, band, config, robust)
     imaging_unit_id, current_state = validate_imaging_ready(source, band, config, robust, db_path, force)
     payload                        = build_imaging_payload(imaging_unit_id, source, band, config, robust, run_id, ncores, db_path)
     payload_path                   = write_payload_file(payload)
     mark_imaging_running(imaging_unit_id, current_state, run_id, db_path)
 
     try:
-        launch_imaging_session(payload_path, source, band, config, robust, ncores, ram_gb, use_staging)
+        launch_imaging_session(payload_path, source, band, config, robust, ncores, ram_gb)
     except Exception as e:
         logger.error(f"[{source} B{band} {config}] Session launch failed — recording failure: {e}")
         conn = db.get_connection(db_path)
@@ -310,7 +305,6 @@ if __name__ == "__main__":
     parser.add_argument("--ram-gb",  type=int, default=None, help="RAM in GB to pin (independent of --ncores; defaults to 16 when ncores is set)")
     parser.add_argument("--force",       action="store_true",                 help="Delete existing products and re-image")
     parser.add_argument("--db-path",    default=None,                        help="Path to serpens_v2.db")
-    parser.add_argument("--use-staging", action="store_true",                help="Submit to CANFAR staging cluster")
     args = parser.parse_args()
 
     imaging_unit_flow(
@@ -322,5 +316,4 @@ if __name__ == "__main__":
         ram_gb=args.ram_gb,
         force=args.force,
         db_path=args.db_path,
-        use_staging=args.use_staging,
     )

@@ -87,7 +87,6 @@ def launch_line_imaging_session(
     force: bool,
     ncores: Optional[int],
     ram_gb: Optional[int],
-    use_staging: bool,
     robust: Optional[float] = None,
 ) -> str:
     """Submit a CASA pipeline headless session to run deep line imaging.
@@ -119,7 +118,7 @@ def launch_line_imaging_session(
     if effective_ram is not None:
         kwargs["ram"] = effective_ram
 
-    session = make_session(use_staging)
+    session = make_session()
     result = create_checked(session, unit_key, **kwargs)
 
     mode_desc = resource_desc(ncores, effective_ram)
@@ -133,7 +132,6 @@ def line_imaging_flow(
     ncores: Optional[int] = None,
     ram_gb: Optional[int] = None,
     robust: Optional[float] = None,
-    use_staging: bool = False,
     db_path: Optional[str] = None,
 ) -> None:
     """Run deep line imaging for one confirmed ADMIT detection via a CANFAR
@@ -160,8 +158,6 @@ def line_imaging_flow(
     ram_gb:
         RAM in GB to pin on the headless session, independently of ncores --
         pinning RAM alone is valid. Defaults to 16 GB when ncores is set.
-    use_staging:
-        If True, submit the headless session to the CANFAR staging cluster.
     db_path:
         Path to the pipeline SQLite database (defaults to config.DB_PATH).
     """
@@ -169,7 +165,7 @@ def line_imaging_flow(
 
     validate_line_imaging_ready(detection_id, db_path)
     launch_line_imaging_session(detection_id, db_path, force, ncores, ram_gb,
-                                use_staging, robust)
+                                robust)
 
 
 if __name__ == "__main__":
@@ -188,7 +184,6 @@ if __name__ == "__main__":
                         help="Briggs robust weighting (default: 0.5). Output names "
                              "carry it as _r05/_r20, so weightings do not overwrite.")
     parser.add_argument("--db-path",  default=None,            help="Path to the SQLite database")
-    parser.add_argument("--use-staging", action="store_true", help="Submit to CANFAR staging cluster")
     args = parser.parse_args()
 
     line_imaging_flow(
@@ -198,5 +193,4 @@ if __name__ == "__main__":
         ram_gb=args.ram_gb,
         robust=args.robust,
         db_path=args.db_path,
-        use_staging=args.use_staging,
     )
