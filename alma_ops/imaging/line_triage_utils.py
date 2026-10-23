@@ -27,16 +27,31 @@ the bin factor is derived purely from the spw's own center frequency: native
 channel width is converted to km/s via the non-relativistic Doppler
 approximation, then binned as coarsely as possible while still resolving
 THERMAL_LINEWIDTH_FLOOR_KMS with MIN_CHANNELS_ACROSS_LINE channels.
+
+Image geometry
+---------------
+Cell and imsize come from the same rules as continuum imaging (robust=2
+beam, primary-beam coverage). Long-baseline data can make that image
+enormous -- 8640-10000 px for the 0.015-0.03" Serpens data, 2-3 TB of tclean
+memory per spw -- so plan_triage_geometry can instead image at a
+uv-tapered resolution: tclean's uvtaper sets the beam to ~taper_arcsec and
+the cell grows to match, while the image still covers the primary beam.
+ADMIT only needs the spectra, and deep line imaging recomputes its own
+full-resolution geometry, so a tapered triage cube loses nothing
+downstream. TRIAGE_MAX_IMSIZE marks where an untapered cube needs an
+explicit decision.
 """
 
 from __future__ import annotations
 
 import math
 
+from alma_ops.imaging.casa_scratch import scratch_cwd
 from alma_ops.imaging.line_triage_config import (
     CONTINUUM_CHANWIDTH_THRESHOLD_KHZ,
     MAX_BIN_FACTOR,
     MIN_CHANNELS_ACROSS_LINE,
+    TCLEAN_BYTES_PER_VOXEL,
     THERMAL_LINEWIDTH_FLOOR_KMS,
 )
 
@@ -230,6 +245,70 @@ def find_active_channel_range(ms_paths: list, spw_idx: int) -> tuple:
     return first_active, last_active
 
 
+def plan_triage_geometry(
+    ms_paths: list,
+    target_name: str,
+    is_mosaic: bool = False,
+    taper_arcsec: float | None = None,
+) -> dict:
+    """Cell, imsize (and mosaic phasecenter) for one source's triage cubes.
+
+    Must be called from inside a CASA session (reads MS metadata).
+
+    Parameters
+    ----------
+    ms_paths:
+        Measurement sets to be imaged.
+    target_name:
+        CASA field name (used for mosaic pointing geometry).
+    is_mosaic:
+        Use compute_mosaic_imaging_params rather than compute_imaging_params.
+    taper_arcsec:
+        If set, image at this uv-tapered resolution: the cell becomes
+        taper_arcsec / PIXELS_PER_BEAM and the cube is made with
+        uvtaper=taper_arcsec. A taper no coarser than the untapered cell
+        allows is ignored (returned taper_arcsec is None).
+
+    Returns
+    -------
+    dict
+        {"cell", "imsize", "phasecenter", "taper_arcsec",
+         "native_cell", "native_imsize"} -- native_* are the untapered
+        values, kept so the saving can be reported.
+    """
+    from alma_ops.imaging.continuum_config import PIXELS_PER_BEAM
+    from alma_ops.imaging.imaging_utils import compute_imaging_params, compute_mosaic_imaging_params
+
+    def _params(cell_arcsec=None):
+        if is_mosaic:
+            return compute_mosaic_imaging_params(ms_paths, target_name, robust=2.0,
+                                                 cell_arcsec=cell_arcsec)
+        cell_str, imsize = compute_imaging_params(ms_paths, robust=2.0, cell_arcsec=cell_arcsec)
+        return cell_str, imsize, None
+
+    native_cell, native_imsize, phasecenter = _params()
+    cell, imsize = native_cell, native_imsize
+    if taper_arcsec is not None:
+        tapered_cell = taper_arcsec / PIXELS_PER_BEAM
+        if tapered_cell > float(native_cell.replace("arcsec", "")):
+            cell, imsize, phasecenter = _params(cell_arcsec=tapered_cell)
+        else:
+            print(f"  [WARNING] taper {taper_arcsec}\" is not coarser than the untapered beam "
+                  f"(cell {native_cell}); ignoring it and imaging at full resolution", flush=True)
+            taper_arcsec = None
+
+    return {"cell": cell, "imsize": imsize, "phasecenter": phasecenter,
+            "taper_arcsec": taper_arcsec,
+            "native_cell": native_cell, "native_imsize": native_imsize}
+
+
+def estimate_triage_footprint(imsize: int, nchan: int) -> dict:
+    """Rough tclean peak memory and FITS size (GB) for an imsize^2 x nchan cube."""
+    voxels = imsize * imsize * nchan
+    return {"tclean_gb": voxels * TCLEAN_BYTES_PER_VOXEL / 1e9,
+            "fits_gb": voxels * 4 / 1e9}
+
+
 def run_line_triage_imaging(
     mous_dir_id: str,
     target_name: str,
@@ -239,6 +318,7 @@ def run_line_triage_imaging(
     bin_factor: int,
     is_mosaic: bool = False,
     keep_casa_products: bool = False,
+    geometry: dict | None = None,
 ) -> dict:
     """Run a dirty tclean cube for one (MOUS, spw) and export it to FITS.
 
@@ -268,11 +348,15 @@ def run_line_triage_imaging(
     keep_casa_products:
         If False (default), delete CASA-format tclean intermediates after
         FITS export.
+    geometry:
+        Output of plan_triage_geometry, computed once per source by the
+        caller. None computes the untapered geometry here.
 
     Returns
     -------
     dict
-        {"cube_fits": <path>, "start_native_chan": <int>}.
+        {"cube_fits", "start_native_chan", "cell", "imsize"}, plus
+        "taper_arcsec" for a tapered cube and "phasecenter" for a mosaic.
         ``start_native_chan`` is the native SPW channel the cube starts at —
         always > 0 when edge channels are flagged in the input MS.
     """
@@ -284,7 +368,6 @@ def run_line_triage_imaging(
     except ImportError:
         raise RuntimeError("run_line_triage_imaging must be called from inside a CASA session.")
 
-    from alma_ops.imaging.imaging_utils import compute_imaging_params, compute_mosaic_imaging_params
     from alma_ops.imaging.line_triage_config import TCLEAN_LINE_TRIAGE_SHARED
 
     img_base = os.path.join(
@@ -309,14 +392,15 @@ def run_line_triage_imaging(
     else:
         print(f"  [WARNING] casalog not found; CASA log will not be redirected to {_log_path}", flush=True)
 
-    print("  [params] computing cell size and image size …", flush=True)
-    phasecenter = None
-    if is_mosaic:
-        cell_str, imsize, phasecenter = compute_mosaic_imaging_params(ms_paths, target_name, robust=2.0)
-        print(f"    cell={cell_str}  imsize={imsize}  gridder=mosaic  phasecenter={phasecenter}", flush=True)
-    else:
-        cell_str, imsize = compute_imaging_params(ms_paths, robust=2.0)
-        print(f"    cell={cell_str}  imsize={imsize}  gridder=standard", flush=True)
+    if geometry is None:
+        print("  [params] computing cell size and image size …", flush=True)
+        geometry = plan_triage_geometry(ms_paths, target_name, is_mosaic=is_mosaic)
+    cell_str, imsize = geometry["cell"], geometry["imsize"]
+    phasecenter = geometry["phasecenter"]
+    taper_arcsec = geometry["taper_arcsec"]
+    print(f"    cell={cell_str}  imsize={imsize}  gridder={'mosaic' if is_mosaic else 'standard'}"
+          + (f"  uvtaper={taper_arcsec}arcsec" if taper_arcsec else "")
+          + (f"  phasecenter={phasecenter}" if phasecenter else ""), flush=True)
 
     # Detect the first/last unflagged native channels and skip the boundary
     # channel on each side, which carries a large spike artifact in dirty mode
@@ -339,6 +423,8 @@ def run_line_triage_imaging(
     tclean_params["gridder"] = "mosaic" if is_mosaic else "standard"
     if phasecenter is not None:
         tclean_params["phasecenter"] = phasecenter
+    if taper_arcsec is not None:
+        tclean_params["uvtaper"] = [f"{taper_arcsec}arcsec"]
     tclean_params.update({
         "vis":       ms_paths,
         "spw":       str(spw_idx),
@@ -353,9 +439,10 @@ def run_line_triage_imaging(
         "nchan":     tclean_nchan,
     })
 
-    _orig_dir = os.getcwd()
-    os.chdir(imaging_dir)
-    try:
+    # Not imaging_dir as cwd: B<band>_<config>/ is shared by every MOUS of this
+    # source, and concurrent runs collide over CASA's TempLattice scratch names
+    # (see casa_scratch.py).
+    with scratch_cwd(img_base):
         print(
             f"  [tclean] starting (spw={spw_idx}, start={tclean_start}, "
             f"bin_factor={bin_factor}, nchan={tclean_nchan}) …",
@@ -363,8 +450,6 @@ def run_line_triage_imaging(
         )
         tclean(**tclean_params)
         print("  [tclean] finished.", flush=True)
-    finally:
-        os.chdir(_orig_dir)
 
     image_path = img_base + ".image"
     cube_fits_path = img_base + ".image.fits"
@@ -391,7 +476,10 @@ def run_line_triage_imaging(
 
     print(f"  [done] {cube_fits_path}", flush=True)
 
-    result = {"cube_fits": cube_fits_path, "start_native_chan": tclean_start}
+    result = {"cube_fits": cube_fits_path, "start_native_chan": tclean_start,
+              "cell": cell_str, "imsize": imsize}
+    if taper_arcsec is not None:
+        result["taper_arcsec"] = taper_arcsec
     if phasecenter is not None:
         result["phasecenter"] = phasecenter
     return result

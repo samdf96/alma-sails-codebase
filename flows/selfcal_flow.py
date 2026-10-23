@@ -40,7 +40,7 @@ from prefect import flow, get_run_logger, task
 from alma_ops import db
 from alma_ops.config import CASA_IMAGE, DB_PATH
 from alma_ops.db import CANONICAL_PREFIX
-from canfar_utils import create_checked, key_selfcal, make_session, report_launch, resource_desc
+from canfar_utils import casarc_env, create_checked, key_selfcal, make_session, report_launch, resource_desc
 
 _HEADLESS_SCRIPT = f"{CANONICAL_PREFIX}/alma-sails-codebase/scripts/manual_selfcal.sh"
 
@@ -88,6 +88,7 @@ def mark_selfcal_running(mous_id: str, db_path: str) -> None:
 @task(name="launch-selfcal-session", retries=2, retry_delay_seconds=60)
 def launch_selfcal_session(
     mous_id: str, db_path: str, ncores: Optional[int], ram_gb: Optional[int],
+    casarc: Optional[str] = None,
 ) -> str:
     """Submit a CASA pipeline headless session to run autoselfcal.
 
@@ -97,6 +98,7 @@ def launch_selfcal_session(
     correctly self-selects parallel=False. ncores set to an int launches in
     fixed mode: cores/RAM pinned via session.create(), and manual_selfcal.sh
     runs mpicasa -n ncores (auto_selfcal detects MPI and sets parallel=True).
+    casarc, if given, is set as CASARCFILES in the session.
     """
     logger = get_run_logger()
 
@@ -109,6 +111,9 @@ def launch_selfcal_session(
         kwargs["cores"] = ncores
     if ram_gb is not None:
         kwargs["ram"] = ram_gb
+    env = casarc_env(casarc)
+    if env:
+        kwargs["env"] = env
 
     session = make_session()
     result = create_checked(session, unit_key, **kwargs)
@@ -122,6 +127,7 @@ def selfcal_mous_flow(
     mous_id: str,
     ncores: Optional[int] = _DEFAULT_NCORES,
     ram_gb: Optional[int] = _DEFAULT_RAM_GB,
+    casarc: Optional[str] = None,
     db_path: Optional[str] = None,
 ) -> None:
     """Run autoselfcal on a split MOUS via a CANFAR headless session.
@@ -137,6 +143,9 @@ def selfcal_mous_flow(
     ram_gb:
         RAM in GB to allocate to the headless session (default 16). Ignored
         in flexible mode.
+    casarc:
+        CASA rc file to set as CASARCFILES in the session (see
+        docs/reference/casa_rc.md). None (default) passes none.
     db_path:
         Path to the pipeline SQLite database (defaults to config.DB_PATH).
     """
@@ -146,10 +155,11 @@ def selfcal_mous_flow(
         ncores = None
 
     validate_split_complete(mous_id, db_path)
+    casarc_env(casarc)  # a missing rc file fails here, before the MOUS is marked running
     mark_selfcal_running(mous_id, db_path)
 
     try:
-        launch_selfcal_session(mous_id, db_path, ncores, ram_gb)
+        launch_selfcal_session(mous_id, db_path, ncores, ram_gb, casarc)
     except Exception as e:
         logger.error(f"[{mous_id}] Session launch failed — recording failure: {e}")
         conn = db.get_connection(db_path)
@@ -173,6 +183,7 @@ if __name__ == "__main__":
     parser.add_argument("--mous-id",     required=True,                       help="MOUS ID (uid://A001/...)")
     parser.add_argument("--ncores",      type=int, default=_DEFAULT_NCORES,   help=f"MPI cores (default {_DEFAULT_NCORES}); pass 0 for flexible mode (no cores/RAM pinned, no mpicasa)")
     parser.add_argument("--ram-gb",      type=int, default=_DEFAULT_RAM_GB,   help=f"RAM in GB (default {_DEFAULT_RAM_GB})")
+    parser.add_argument("--casarc",      default=None,                        help="CASA rc file to set as CASARCFILES in the session")
     parser.add_argument("--db-path",     default=None,                        help="Path to the SQLite database")
     args = parser.parse_args()
 
@@ -180,5 +191,6 @@ if __name__ == "__main__":
         mous_id=args.mous_id,
         ncores=args.ncores,
         ram_gb=args.ram_gb,
+        casarc=args.casarc,
         db_path=args.db_path,
     )

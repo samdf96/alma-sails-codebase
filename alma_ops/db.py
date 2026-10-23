@@ -980,6 +980,23 @@ def record_line_admit_failure(
     return transition_id
 
 
+def _insert_detection_rows(conn: sqlite3.Connection, line_admit_unit_id: int,
+                           detections: list[dict]) -> None:
+    """INSERT parsed lltable rows; the caller owns the transaction."""
+    for d in detections:
+        conn.execute(
+            """
+            INSERT INTO line_admit_detection
+                (line_admit_unit_id, frequency_ghz, uid, formula, species_name, transition,
+                 velocity_kms, peakrms_sigma, peakintensity_jybeam, startchan, endchan, blend_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (line_admit_unit_id, d["frequency"], d["uid"], d.get("formula"), d.get("name"),
+             d.get("transition"), d.get("velocity"), d.get("peakrms"), d.get("peakintensity"),
+             d.get("startchan"), d.get("endchan"), d.get("blend")),
+        )
+
+
 def insert_line_admit_detections(
     conn: sqlite3.Connection, line_admit_unit_id: int, detections: list[dict],
 ) -> None:
@@ -990,18 +1007,80 @@ def insert_line_admit_detections(
     peakintensity, startchan, endchan, blend (see alma_ops.imaging.line_admit_utils
     for the parser that produces these dicts from lltable.N.json)."""
     with transaction(conn):
-        for d in detections:
-            conn.execute(
-                """
-                INSERT INTO line_admit_detection
-                    (line_admit_unit_id, frequency_ghz, uid, formula, species_name, transition,
-                     velocity_kms, peakrms_sigma, peakintensity_jybeam, startchan, endchan, blend_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (line_admit_unit_id, d["frequency"], d["uid"], d.get("formula"), d.get("name"),
-                 d.get("transition"), d.get("velocity"), d.get("peakrms"), d.get("peakintensity"),
-                 d.get("startchan"), d.get("endchan"), d.get("blend")),
-            )
+        _insert_detection_rows(conn, line_admit_unit_id, detections)
+
+
+# reviewed_note prefix written by review_line_detections.py --reject-below. A
+# threshold rejection is reproducible by re-running that command, so it does
+# not count as a human review that an ADMIT re-run would throw away.
+AUTO_REJECT_NOTE_PREFIX = "auto-rejected:"
+
+
+def get_line_admit_detections_blocking_rerun(
+    conn: sqlite3.Connection, line_admit_unit_id: int,
+) -> list[sqlite3.Row]:
+    """Detections an ADMIT re-run on this unit must not silently replace.
+
+    Those carrying a human review (confirmed, or rejected other than by the
+    --reject-below threshold) and any with a deep line-imaging unit attached.
+    Pending and threshold-rejected detections are reproducible and are not
+    returned.
+    """
+    return fetch_all(
+        conn,
+        """
+        SELECT d.line_admit_detection_id, d.species_name, d.formula, d.frequency_ghz,
+               d.review_status, d.reviewed_note,
+               (SELECT li.line_imaging_unit_id FROM line_imaging_unit li
+                 WHERE li.line_admit_detection_id = d.line_admit_detection_id) AS line_imaging_unit_id
+        FROM line_admit_detection d
+        WHERE d.line_admit_unit_id = ?
+          AND (
+              d.review_status = 'confirmed'
+              OR (d.review_status = 'rejected'
+                  AND COALESCE(d.reviewed_note, '') NOT LIKE ? || '%')
+              OR EXISTS (SELECT 1 FROM line_imaging_unit li
+                          WHERE li.line_admit_detection_id = d.line_admit_detection_id)
+          )
+        ORDER BY d.frequency_ghz
+        """,
+        (line_admit_unit_id, AUTO_REJECT_NOTE_PREFIX),
+    )
+
+
+def replace_line_admit_detections(
+    conn: sqlite3.Connection, line_admit_unit_id: int, detections: list[dict],
+) -> list[dict]:
+    """Replace a unit's detections with a new ADMIT run's, in one transaction.
+
+    insert_line_admit_detections alone is a plain INSERT, so re-running ADMIT
+    on a unit (--force, or a retry after a run that wrote its detections and
+    then failed) would stack a second set beside the first. This deletes the
+    unit's existing rows and inserts the new ones atomically, so a failure
+    leaves the old set intact.
+
+    Raises RuntimeError if any existing detection is in
+    get_line_admit_detections_blocking_rerun -- callers check that before
+    running ADMIT, so this is only a guard.
+
+    Returns
+    -------
+    list[dict]
+        The replaced rows, all columns, for recording in the run log.
+    """
+    blocking = get_line_admit_detections_blocking_rerun(conn, line_admit_unit_id)
+    if blocking:
+        ids = ", ".join(str(r["line_admit_detection_id"]) for r in blocking)
+        raise RuntimeError(f"line_admit_unit {line_admit_unit_id} has reviewed or deep-imaged "
+                           f"detections ({ids}); refusing to replace them")
+    old = [dict(r) for r in fetch_all(
+        conn, "SELECT * FROM line_admit_detection WHERE line_admit_unit_id = ?",
+        (line_admit_unit_id,))]
+    with transaction(conn):
+        conn.execute("DELETE FROM line_admit_detection WHERE line_admit_unit_id = ?",
+                     (line_admit_unit_id,))
+        _insert_detection_rows(conn, line_admit_unit_id, detections)
+    return old
 
 
 def get_line_admit_detections(

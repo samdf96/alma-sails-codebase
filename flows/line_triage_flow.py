@@ -23,12 +23,20 @@ needs more headroom -- see the OOM-killed line-triage jobs this option
 exists for (state_transitions notes for SMM1/Ser-SMM3/Serpens_Main,
 2026-07-03, recovered via reset_line_triage.py).
 
+Pass casarc (a CASA rc file, set as CASARCFILES in the session) to cap
+tclean's memory -- e.g. config.CASARC_LOWMEM for a flexible session, or
+config.CASARC_HIGHMEM with ram_gb=192; see docs/reference/casa_rc.md.
+Without one, tclean sizes cube chunks from the host's RAM. Long-baseline
+data whose triage image exceeds TRIAGE_MAX_IMSIZE needs taper_arcsec (image
+at a uv-tapered resolution) or allow_large, or the session refuses it.
+
 Deployment:
     prefect deploy --all   (from the flows/ directory)
 
 Direct invocation (VM shell, for testing):
     python alma-sails-codebase/flows/line_triage_flow.py --mous-id uid://A001/X.../X... --source EC_53
     python alma-sails-codebase/flows/line_triage_flow.py --mous-id uid://A001/X.../X... --source EC_53 --ram-gb 32
+    python alma-sails-codebase/flows/line_triage_flow.py --mous-id uid://A001/X.../X... --source OOser --taper-arcsec 0.15
 """
 
 from __future__ import annotations
@@ -45,7 +53,7 @@ from alma_ops import db
 from alma_ops.config import CASA_IMAGE, DB_PATH
 from alma_ops.db import CANONICAL_PREFIX
 from alma_ops.imaging.line_triage_config import THERMAL_LINEWIDTH_FLOOR_KMS
-from canfar_utils import create_checked, key_line_triage, make_session, report_launch
+from canfar_utils import casarc_env, create_checked, key_line_triage, make_session, report_launch
 
 _HEADLESS_SCRIPT = f"{CANONICAL_PREFIX}/alma-sails-codebase/scripts/headless_line_triage_imaging.sh"
 
@@ -93,6 +101,9 @@ def launch_line_triage_session(
     spw: Optional[int],
     force: bool,
     ram_gb: Optional[int],
+    taper_arcsec: Optional[float] = None,
+    allow_large: bool = False,
+    casarc: Optional[str] = None,
 ) -> str:
     """Submit a CASA pipeline headless session to run line-triage imaging.
 
@@ -101,19 +112,33 @@ def launch_line_triage_session(
     script's tclean calls can use extra cores (no parallel= wired up, unlike
     continuum imaging). Purely a CANFAR resource reservation; the underlying
     script's behavior is identical either way.
+
+    The session args are mous_id, source and db_path followed by named options
+    for manual_line_triage_imaging.py; casarc, if given, is set as CASARCFILES
+    in the session.
     """
     logger = get_run_logger()
 
     canonical_db_path = db.to_canonical(db_path)
     unit_key = key_line_triage(mous_id, source)
 
-    args = f"{mous_id} {source} {canonical_db_path} {linewidth_floor_kms}"
-    args = f"{args} {spw if spw is not None else ''}"
-    args = f"{args} {'1' if force else ''}"
+    opts = [f"--linewidth-floor-kms {linewidth_floor_kms}"]
+    if spw is not None:
+        opts.append(f"--spw {spw}")
+    if taper_arcsec is not None:
+        opts.append(f"--taper-arcsec {taper_arcsec}")
+    if allow_large:
+        opts.append("--allow-large")
+    if force:
+        opts.append("--force")
+    args = f"{mous_id} {source} {canonical_db_path} " + " ".join(opts)
 
     kwargs = dict(image=CASA_IMAGE, cmd=_HEADLESS_SCRIPT, args=args)
     if ram_gb is not None:
         kwargs["ram"] = ram_gb
+    env = casarc_env(casarc)
+    if env:
+        kwargs["env"] = env
 
     session = make_session()
     result = create_checked(session, unit_key, **kwargs)
@@ -130,6 +155,9 @@ def line_triage_mous_flow(
     spw: Optional[int] = None,
     force: bool = False,
     ram_gb: Optional[int] = None,
+    taper_arcsec: Optional[float] = None,
+    allow_large: bool = False,
+    casarc: Optional[str] = None,
     db_path: Optional[str] = None,
 ) -> None:
     """Run ADMIT-bound line-triage imaging for one MOUS/source via a CANFAR headless session.
@@ -150,13 +178,24 @@ def line_triage_mous_flow(
         RAM in GB to pin on the headless session. None (default) is flexible
         mode -- no cores/RAM pinned. Never pins cores; nothing in this
         script's tclean calls can use extra cores.
+    taper_arcsec:
+        Image at this uv-tapered resolution (arcsec), with a cell to match,
+        instead of the array's full resolution. None (default) images at
+        full resolution.
+    allow_large:
+        Image above TRIAGE_MAX_IMSIZE at full resolution anyway.
+    casarc:
+        CASA rc file to set as CASARCFILES in the session, e.g.
+        config.CASARC_LOWMEM, or config.CASARC_HIGHMEM with ram_gb=192.
+        None (default) passes none; see docs/reference/casa_rc.md.
     db_path:
         Path to the pipeline SQLite database (defaults to config.DB_PATH).
     """
     db_path = db_path or str(DB_PATH)
 
     validate_triage_ready(mous_id, source, db_path)
-    launch_line_triage_session(mous_id, source, db_path, linewidth_floor_kms, spw, force, ram_gb)
+    launch_line_triage_session(mous_id, source, db_path, linewidth_floor_kms, spw, force, ram_gb,
+                               taper_arcsec, allow_large, casarc)
 
 
 if __name__ == "__main__":
@@ -173,6 +212,12 @@ if __name__ == "__main__":
     parser.add_argument("--force",    action="store_true",    help="Re-image spws already complete")
     parser.add_argument("--ram-gb",   type=int, default=None,
                         help="Pin this much RAM on the session (default: flexible, no cores/RAM pinned)")
+    parser.add_argument("--taper-arcsec", type=float, default=None,
+                        help="Image at this uv-tapered resolution (arcsec) instead of full resolution")
+    parser.add_argument("--allow-large", action="store_true",
+                        help="Image above TRIAGE_MAX_IMSIZE at full resolution anyway")
+    parser.add_argument("--casarc",   default=None,
+                        help="CASA rc file to set as CASARCFILES in the session (default: none)")
     parser.add_argument("--db-path",  default=None,            help="Path to the SQLite database")
     args = parser.parse_args()
 
@@ -183,5 +228,8 @@ if __name__ == "__main__":
         spw=args.spw,
         force=args.force,
         ram_gb=args.ram_gb,
+        taper_arcsec=args.taper_arcsec,
+        allow_large=args.allow_large,
+        casarc=args.casarc,
         db_path=args.db_path,
     )

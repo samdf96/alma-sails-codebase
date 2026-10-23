@@ -11,14 +11,14 @@ with zero line_triage_run_log entries, since manual_line_triage_imaging.py's
 own try/except only catches Python exceptions raised inside the script, not
 the process being killed outright.
 
-Deletes the partial CASA-format products (and any orphaned TempLattice*
-scratch files a hard-killed tclean leaves behind) for the given spw, then
-resets the line_triage_unit back to 'ready' so it can be retried cleanly.
-Does not touch other spws' products in the same imaging_dir. The TempLattice*
-sweep is not spw-scoped (CASA doesn't namespace these by spw) -- it assumes
-no other tclean job is concurrently running against the same imaging_dir,
-matching the "don't submit concurrent jobs sharing a MOUS" constraint
-already documented in DEVLOG.md for continuum imaging.
+Deletes the partial CASA-format products, plus the run's own
+<img_base>.scratch directory (the cwd tclean ran in, holding the TempLattice*
+scratch a hard-killed tclean leaves behind), for the given spw, then resets
+the line_triage_unit back to 'ready' so it can be retried cleanly. Does not
+touch other spws' products in the same imaging_dir. Runs from before the
+scratch directory existed left TempLattice* directly in imaging_dir; those are
+deliberately not swept, since another MOUS's run of the same source may still
+be using its own (see alma_ops/imaging/casa_scratch.py).
 
 The unit must be in 'failed' or 'running' state.
 
@@ -43,6 +43,7 @@ import argparse
 
 from alma_ops import db
 from alma_ops.config import DB_PATH, LINE_TRIAGE_DIR
+from alma_ops.imaging.casa_scratch import SCRATCH_SUFFIX
 from alma_ops.utils import to_dir_mous_id
 
 _RECOVERABLE_STATES = {"failed", "running"}
@@ -92,12 +93,12 @@ def main(mous_id: str, source: str, spw: int, db_path: Path) -> None:
             p.unlink()
         removed.append(p.name)
 
-    for p in imaging_dir.glob("TempLattice*"):
-        if p.is_dir():
-            shutil.rmtree(p, ignore_errors=True)
-        else:
-            p.unlink()
-        removed.append(p.name)
+    # Only this run's own scratch dir: a TempLattice* glob over imaging_dir would
+    # also delete the live scratch of another MOUS's run of the same source.
+    scratch_dir = Path(str(img_base) + SCRATCH_SUFFIX)
+    if scratch_dir.exists():
+        shutil.rmtree(scratch_dir, ignore_errors=True)
+        removed.append(scratch_dir.name)
 
     if removed:
         print(f"[reset-line-triage] removed {len(removed)} item(s): {', '.join(removed)}")

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import math
 
+from alma_ops.imaging.casa_scratch import scratch_cwd
 from alma_ops.imaging.continuum_config import (
     B75_COMPACT_MAX,
     B75_EXTENDED_MIN,
@@ -143,6 +144,7 @@ def compute_imaging_params(
     robust=0.5,
     pixels_per_beam=PIXELS_PER_BEAM,
     pb_coverage_factor=PB_COVERAGE_FACTOR,
+    cell_arcsec: float | None = None,
 ):
     """Compute tclean cell size and image size from measurement set metadata.
 
@@ -164,6 +166,10 @@ def compute_imaging_params(
         Target pixels across the synthesised beam minor axis.
     pb_coverage_factor:
         Image extent as a multiple of the primary beam FWHM diameter.
+    cell_arcsec:
+        Use this cell instead of the one derived from the baselines, e.g.
+        for a uv-tapered cube whose beam is much larger than the array's.
+        imsize still covers the same primary-beam extent.
 
     Returns
     -------
@@ -253,7 +259,8 @@ def compute_imaging_params(
     scale = _robust_scale_factor(robust)
     theta_minor_rad = theta_nat_rad * scale * MINOR_AXIS_FRACTION
     theta_minor_arcsec = math.degrees(theta_minor_rad) * 3600.0
-    cell_arcsec = theta_minor_arcsec / pixels_per_beam
+    if cell_arcsec is None:
+        cell_arcsec = theta_minor_arcsec / pixels_per_beam
 
     # Round to 3 significant figures
     magnitude = 10 ** math.floor(math.log10(cell_arcsec))
@@ -397,6 +404,7 @@ def compute_mosaic_imaging_params(
     pixels_per_beam=PIXELS_PER_BEAM,
     pb_coverage_factor=PB_COVERAGE_FACTOR,
     field_ids_by_ms: dict | None = None,
+    cell_arcsec: float | None = None,
 ):
     """Compute tclean cell, imsize, and phasecenter for a mosaic field.
 
@@ -440,6 +448,8 @@ def compute_mosaic_imaging_params(
         FIELD table, so it silently means a different pointing wherever that
         ordering differs from whatever numbering the caller took it from,
         while SMSS_<N>-style names are carried in the FIELD table itself.
+    cell_arcsec:
+        Cell override, passed through to compute_imaging_params.
 
     Returns
     -------
@@ -456,7 +466,8 @@ def compute_mosaic_imaging_params(
 
     C_MS = 299_792_458.0  # speed of light, m/s
 
-    cell_str, _ = compute_imaging_params(ms_paths, robust=robust, pixels_per_beam=pixels_per_beam)
+    cell_str, _ = compute_imaging_params(ms_paths, robust=robust, pixels_per_beam=pixels_per_beam,
+                                         cell_arcsec=cell_arcsec)
     cell_arcsec = float(cell_str.replace("arcsec", ""))
 
     ra_vals, dec_vals = [], []
@@ -768,17 +779,14 @@ def run_continuum_imaging(
     if phasecenter is not None:
         tclean_params["phasecenter"] = phasecenter
 
-    # TempLattice files are written to cwd by CASA, not to imagename's directory.
-    # Chdir into imaging_dir so they land alongside the image products, not in the
-    # project root or wherever the user launched casa from.
-    _orig_dir = os.getcwd()
-    os.chdir(imaging_dir)
-    try:
+    # CASA writes TempLattice scratch to cwd, not to imagename's directory. A
+    # per-run dir beside the products keeps it out of wherever casa was launched
+    # from, and apart from any concurrent run in the same imaging_dir (e.g. the
+    # robust 0.5 and 2.0 images of one unit; see casa_scratch.py).
+    with scratch_cwd(img_base):
         print(f"  [tclean] starting … (parallel={parallel})", flush=True)
         tclean(**tclean_params)
         print("  [tclean] finished.", flush=True)
-    finally:
-        os.chdir(_orig_dir)
 
     # 6. Primary beam correction
     image_path       = img_base + ".image"

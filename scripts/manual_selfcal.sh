@@ -88,6 +88,7 @@ else
     echo "[selfcal] ncores   : $NCORES"
 fi
 echo "[selfcal] db_path  : $DB_PATH"
+echo "[selfcal] CASARCFILES : ${CASARCFILES:-<unset>}"
 echo "[selfcal] mous_dir : $MOUS_DIR"
 echo "[selfcal] splits:"
 python3 -c "import json,sys; [print(f'    {p}') for p in json.loads(sys.argv[1])]" "$SPLIT_JSON"

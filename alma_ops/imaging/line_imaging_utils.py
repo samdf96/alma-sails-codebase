@@ -60,6 +60,7 @@ import os
 import re
 import shutil
 
+from alma_ops.imaging.casa_scratch import scratch_cwd
 from alma_ops.imaging.continuum_config import DEFAULT_ROBUST, select_automask
 from alma_ops.imaging.line_imaging_config import (
     LINE_IMAGING_PAD_MAX_CHANNELS,
@@ -473,15 +474,12 @@ def run_line_imaging(
     if phasecenter is not None:
         tclean_params["phasecenter"] = phasecenter
 
-    # TempLattice files are written to cwd by CASA, not to imagename's directory.
-    _orig_dir = os.getcwd()
-    os.chdir(imaging_dir)
-    try:
+    # Not <target>/ as cwd: concurrent runs on one target collide over CASA's
+    # TempLattice scratch names (see casa_scratch.py).
+    with scratch_cwd(img_base):
         print(f"  [tclean] starting … (nchan={nchan}, parallel={parallel})", flush=True)
         tclean(**tclean_params)
         print("  [tclean] finished.", flush=True)
-    finally:
-        os.chdir(_orig_dir)
 
     image_path      = img_base + ".image"
     pbcor_image      = img_base + ".image.pbcor"

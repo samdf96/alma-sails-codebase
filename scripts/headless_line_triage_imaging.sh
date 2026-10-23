@@ -4,44 +4,42 @@
 # CANFAR headless session entry point for ADMIT-bound line-triage imaging.
 # Runs inside a CASA pipeline (c-casa) container.
 #
-# Positional args (passed via session.create args=):
-#   $1  mous_id              e.g. uid://A001/X.../X...
-#   $2  source               Target/field name within this MOUS
-#   $3  db_path              Canonical path to the pipeline SQLite database
-#   $4  linewidth_floor_kms  (optional) narrowest protected line FWHM in km/s
-#   $5  spw_override         (optional) restrict to a single spw index
-#   $6  force                (optional) "1" to re-image spws already complete
+# Args (passed via session.create args=):
+#   $1  mous_id    e.g. uid://A001/X.../X...
+#   $2  source     Target/field name within this MOUS
+#   $3  db_path    Canonical path to the pipeline SQLite database
+#   $4...          Options passed through unchanged to
+#                  manual_line_triage_imaging.py, e.g.
+#                    --linewidth-floor-kms 8.0 --spw 0 --force --taper-arcsec 0.15
+#
+# Options are named, matching manual_line_triage_imaging.py's own CLI, because
+# session args arrive as one whitespace-split string: an empty optional
+# positional would vanish and shift everything after it.
+#
+# A CASA rc file can be passed by setting CASARCFILES in the session
+# environment (the flow's casarc= / a launcher's --casarc). CASA reads it
+# itself; this script only reports it. Without one, tclean sizes its cube
+# chunks from the host's RAM rather than the session's -- see
+# docs/reference/casa_rc.md and the presets in casarc/.
 
 set -euo pipefail
 
 MOUS_ID="$1"
 SOURCE="$2"
 DB_PATH="$3"
-LINEWIDTH_FLOOR_KMS="${4:-}"
-SPW_OVERRIDE="${5:-}"
-# "0" is the sentinel meaning "no spw override" (batch_line_triage.py uses it so that
-# $6/FORCE is not swallowed by shell word-splitting when SPW_OVERRIDE is absent).
-[ "$SPW_OVERRIDE" = "0" ] && SPW_OVERRIDE=""
-FORCE="${6:-}"
+shift 3
 
 CODEBASE_DIR="/arc/projects/ALMA-SAILS/alma-sails-codebase"
 
-echo "[headless-line-triage] mous_id             : $MOUS_ID"
-echo "[headless-line-triage] source              : $SOURCE"
-echo "[headless-line-triage] db_path             : $DB_PATH"
-echo "[headless-line-triage] linewidth_floor_kms : ${LINEWIDTH_FLOOR_KMS:-<default>}"
-echo "[headless-line-triage] spw_override        : ${SPW_OVERRIDE:-<all line candidates>}"
-echo "[headless-line-triage] force               : ${FORCE:-0}"
-
-EXTRA_ARGS=()
-if [ -n "$LINEWIDTH_FLOOR_KMS" ]; then
-    EXTRA_ARGS+=(--linewidth-floor-kms "$LINEWIDTH_FLOOR_KMS")
-fi
-if [ -n "$SPW_OVERRIDE" ]; then
-    EXTRA_ARGS+=(--spw "$SPW_OVERRIDE")
-fi
-if [ "$FORCE" = "1" ]; then
-    EXTRA_ARGS+=(--force)
+echo "[headless-line-triage] mous_id     : $MOUS_ID"
+echo "[headless-line-triage] source      : $SOURCE"
+echo "[headless-line-triage] db_path     : $DB_PATH"
+echo "[headless-line-triage] options     : ${*:-<none>}"
+if [ -n "${CASARCFILES:-}" ]; then
+    echo "[headless-line-triage] CASARCFILES : $CASARCFILES"
+else
+    echo "[headless-line-triage] CASARCFILES : <unset> -- WARNING: tclean will size cube chunks" \
+         "from the host's RAM, not this session's; large cubes may be killed (docs/reference/casa_rc.md)"
 fi
 
 casa --nologger --nogui \
@@ -49,4 +47,4 @@ casa --nologger --nogui \
     --mous-id "${MOUS_ID}" \
     --source "${SOURCE}" \
     --db-path "${DB_PATH}" \
-    "${EXTRA_ARGS[@]}"
+    "$@"

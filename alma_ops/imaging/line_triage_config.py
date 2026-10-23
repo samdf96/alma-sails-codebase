@@ -31,6 +31,19 @@ MAX_BIN_FACTOR: int = 16
 # been observed at 60-1000 kHz. See classify_spws.
 CONTINUUM_CHANWIDTH_THRESHOLD_KHZ: float = 2000.0
 
+# Largest triage image (pixels per side) imaged without --taper-arcsec or
+# --allow-large. Every survey triage cube through 2026-10 was <=2000 px; the
+# two that were not (OOser X186d at 10000, EC_53 X20a0 at 8640, both
+# 0.015-0.03" long-baseline data) needed 2-3 TB per spw at native resolution
+# and could not run. A dirty triage cube only has to show ADMIT where lines
+# are, so such data is tapered rather than imaged at full resolution.
+TRIAGE_MAX_IMSIZE: int = 4096
+
+# Peak tclean memory per image pixel per channel, measured on survey triage
+# runs (X37f7: 741 GB for 1944^2 x 3838 ch). Used only for the size estimate
+# printed before imaging.
+TCLEAN_BYTES_PER_VOXEL: float = 51.0
+
 # tclean parameters shared by all triage cubes. Not included here (computed
 # or supplied per job): vis, spw, imagename, imsize, cell, start, width, nchan.
 TCLEAN_LINE_TRIAGE_SHARED: dict = {

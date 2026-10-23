@@ -22,6 +22,15 @@ LINE_FINAL_DIR         = LINE_IMAGING_DIR / "final"
 SCOUSE_DIR             = LINE_IMAGING_DIR / "scouse"
 SRDP_WEBLOG_DIR        = PROJECT_ROOT / "SRDP_weblogs"
 
+# Preset CASA rc files, for passing to a headless session as CASARCFILES
+# (a flow's casarc= or a launcher's --casarc). Nothing applies them
+# automatically. lowmem caps tclean at 24 GB for flexible sessions; highmem
+# at 150 GB for a session pinned at ram_gb=192. Why a cap is needed and what
+# an rc file must contain: docs/reference/casa_rc.md.
+CODEBASE_ROOT  = Path(__file__).resolve().parents[1]
+CASARC_LOWMEM  = CODEBASE_ROOT / "casarc" / "casa_lowmem.rc"
+CASARC_HIGHMEM = CODEBASE_ROOT / "casarc" / "casa_highmem.rc"
+
 # Container images
 CASA_IMAGE    = "images.canfar.net/casa-6/casa:6.5.4-9-pipeline"
 ASTROML_IMAGE = "images.canfar.net/skaha/astroml:26.03"

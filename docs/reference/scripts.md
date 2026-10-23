@@ -129,11 +129,15 @@ casa [--nologger] [--nologfile] \
     -c alma-sails-codebase/scripts/manual_line_triage_imaging.py \
     --mous-id <mous-id> --source <source> \
     [--spw <spw-index>] \
-    [--linewidth-floor-kms 1.0] \
+    [--linewidth-floor-kms 0.3] \
+    [--taper-arcsec <arcsec>] [--allow-large] \
     [--force] [--dry-run]
 ```
 
-Advances: creates and completes `line_triage_unit` rows per SPW
+Advances: creates `line_triage_unit` rows (`ready`) for every line-candidate SPW,
+then completes them one by one. Large cubes need a CASA rc file
+(`CASARCFILES=...`, see [CASA rc files](casa_rc.md)); images above
+`TRIAGE_MAX_IMSIZE` need `--taper-arcsec` or `--allow-large`.
 
 ---
 
@@ -160,6 +164,12 @@ casa [--nologger] [--nologfile] \
 ```
 
 Advances: admit `ready → complete`
+
+A re-run (`--force`, or a retry after a failure) replaces the unit's detections
+rather than adding a second set; the replaced rows are kept in the run-log
+payload. It is refused before ADMIT starts if any detection has been reviewed by
+hand (confirmed, or rejected other than by `--reject-below`) or has a deep
+line-imaging unit, since the re-run would discard that review.
 
 ---
 

@@ -144,6 +144,7 @@ _TRANSITION_RANGES: list[tuple[str, float, float, str]] = [
     ("Diazenylium", 279.00, 280.00, "N2H+(3-2)"),        # rest 279.512 GHz  Band 7
 
     # ── Cyanoacetylene (HC3N) ─────────────────────────────────────────────────
+    ("Cyanoacetylene",  90.50,  91.50, "HC3N(10-9)"),    # rest  90.979 GHz  Band 3
     ("Cyanoacetylene", 108.70, 109.70, "HC3N(12-11)"),   # rest 109.174 GHz  Band 3
     ("Cyanoacetylene", 217.85, 218.85, "HC3N(24-23)"),   # rest 218.325 GHz  Band 6
     ("Cyanoacetylene", 226.90, 227.90, "HC3N(25-24)"),   # rest 227.419 GHz  Band 6

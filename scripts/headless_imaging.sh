@@ -17,6 +17,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 NCORES=$(python3 -c "import json; print(json.load(open('$PAYLOAD')).get('ncores', 1))")
 
+echo "[headless-imaging] payload     : $PAYLOAD"
+echo "[headless-imaging] ncores      : $NCORES"
+echo "[headless-imaging] CASARCFILES : ${CASARCFILES:-<unset>}"
+
 if [ "$NCORES" -gt 1 ]; then
     mpicasa -n "$NCORES" casa -c "${SCRIPT_DIR}/headless_continuum_imaging.py" "$PAYLOAD"
 else

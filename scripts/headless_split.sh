@@ -20,6 +20,7 @@ CODEBASE_DIR="/arc/projects/ALMA-SAILS/alma-sails-codebase"
 echo "[headless-split] mous_id      : $MOUS_ID"
 echo "[headless-split] db_path      : $DB_PATH"
 echo "[headless-split] spw_override : ${SPW_OVERRIDE:-<from alminer>}"
+echo "[headless-split] CASARCFILES  : ${CASARCFILES:-<unset>}"
 
 SPW_ARG=""
 if [ -n "$SPW_OVERRIDE" ]; then

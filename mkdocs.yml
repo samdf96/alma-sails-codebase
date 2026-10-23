@@ -74,3 +74,4 @@ nav:
     - Script Reference: reference/scripts.md
     - Database Schema: reference/database.md
     - Pipeline States: reference/states.md
+    - CASA rc Files: reference/casa_rc.md

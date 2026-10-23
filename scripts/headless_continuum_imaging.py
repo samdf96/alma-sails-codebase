@@ -116,9 +116,8 @@ def main() -> None:
     products_entry = dict(products)
     products_entry["robust"] = robust
     products_entry["completed_at"] = datetime.now(timezone.utc).isoformat()
-    # Which code produced this product. batch_continuum_reimage.py decides what
-    # is still outstanding by looking for a post-fix commit here -- without it
-    # every unit looks unprocessed forever and the campaign never converges.
+    # Which code produced this product, so a product made before a fix can be
+    # told apart from one made after it (see alma_ops.utils.code_version).
     products_entry["code_commit"] = code_version()
 
     conn = db.get_connection(db_path)

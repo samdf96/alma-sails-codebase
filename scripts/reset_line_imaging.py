@@ -12,8 +12,11 @@ exceptions, not the process being killed outright.
 
 Deletes the partial CASA-format products (via the same build_img_base helper
 run_line_imaging itself uses, so this doesn't depend on imaging_products --
-which may not exist yet if the run died before ever completing), plus any
-orphaned TempLattice* scratch files, then resets the unit back to 'ready'.
+which may not exist yet if the run died before ever completing), plus the
+run's own <img_base>.scratch directory (CASA's TempLattice* cwd), then resets
+the unit back to 'ready'. Runs from before the scratch directory existed left
+TempLattice* directly in <target>/; those are deliberately not swept, since
+another run imaging the same target may still be using its own.
 
 The unit must be in 'failed' or 'running' state.
 
@@ -38,6 +41,7 @@ import argparse
 from alma_ops import db
 from alma_ops.config import DB_PATH, LINE_FINAL_DIR
 from alma_ops.imaging.continuum_config import DEFAULT_ROBUST
+from alma_ops.imaging.casa_scratch import SCRATCH_SUFFIX
 from alma_ops.imaging.line_imaging_utils import build_img_base
 from alma_ops.utils import to_dir_mous_id
 
@@ -96,13 +100,12 @@ def main(detection_id: int, db_path: Path, robust: float = DEFAULT_ROBUST) -> No
             p.unlink()
         removed.append(p.name)
 
-    if imaging_dir.exists():
-        for p in imaging_dir.glob("TempLattice*"):
-            if p.is_dir():
-                shutil.rmtree(p, ignore_errors=True)
-            else:
-                p.unlink()
-            removed.append(p.name)
+    # Only this run's own scratch dir: a TempLattice* glob over <target>/ would
+    # also delete the live scratch of any other run imaging the same target.
+    scratch_dir = Path(str(img_base) + SCRATCH_SUFFIX)
+    if scratch_dir.exists():
+        shutil.rmtree(scratch_dir, ignore_errors=True)
+        removed.append(scratch_dir.name)
 
     if removed:
         print(f"[reset-line-imaging] removed {len(removed)} item(s): {', '.join(removed)}")

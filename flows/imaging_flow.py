@@ -42,7 +42,7 @@ from alma_ops.imaging.imaging_payload import (
 )
 from alma_ops.config import CASA_IMAGE, CONTINUUM_IMAGING_DIR, DB_PATH
 from alma_ops.db import CANONICAL_PREFIX
-from canfar_utils import (create_checked, ensure_unit_free, key_imaging, make_session,
+from canfar_utils import (casarc_env, create_checked, ensure_unit_free, key_imaging, make_session,
                           report_launch, resource_desc)
 
 _HEADLESS_SCRIPT = f"{CANONICAL_PREFIX}/alma-sails-codebase/scripts/headless_imaging.sh"
@@ -132,9 +132,9 @@ def build_imaging_payload(
 ) -> dict:
     """Thin wrapper over alma_ops.imaging.imaging_payload.build_imaging_payload.
 
-    The implementation is shared with batch_continuum_reimage.py, which launches
-    CANFAR sessions directly with no Prefect server; keeping one copy avoids the
-    two drifting apart on subtleties like the is_mosaic determination.
+    The implementation lives in alma_ops so launchers that submit CANFAR
+    sessions directly, with no Prefect server, use the same code; keeping one
+    copy avoids drift on subtleties like the is_mosaic determination.
     """
     return _build_imaging_payload(
         imaging_unit_id=imaging_unit_id, source=source, band=band, config=config,
@@ -182,11 +182,13 @@ def launch_imaging_session(
     robust: float,
     ncores: Optional[int],
     ram_gb: Optional[int],
+    casarc: Optional[str] = None,
 ) -> str:
     """Submit the headless CASA imaging session to CANFAR.
 
     ncores=None launches in flexible mode (no cores/RAM specified).
     ncores>1 enables parallel tclean via mpicasa; RAM defaults to _PARALLEL_RAM_GB.
+    casarc, if given, is set as CASARCFILES in the session.
     """
     logger = get_run_logger()
 
@@ -207,6 +209,9 @@ def launch_imaging_session(
         _PARALLEL_RAM_GB if ncores is not None else None)
     if effective_ram is not None:
         kwargs["ram"] = effective_ram
+    env = casarc_env(casarc)
+    if env:
+        kwargs["env"] = env
     logger.info(f"[{source} B{band} {config}] Attempting session launch "
                 f"({resource_desc(ncores, effective_ram)}) ...")
 
@@ -236,6 +241,7 @@ def imaging_unit_flow(
     ncores: Optional[int] = None,
     ram_gb: Optional[int] = None,
     force: bool = False,
+    casarc: Optional[str] = None,
     db_path: Optional[str] = None,
 ) -> None:
     """Run continuum imaging for one imaging unit via a CANFAR headless session.
@@ -261,12 +267,18 @@ def imaging_unit_flow(
         ncores > 1 and not specified.
     force:
         If True, delete existing products for the given robust value and re-image.
+    casarc:
+        CASA rc file to set as CASARCFILES in the session, e.g. to cap
+        tclean's memory (presets config.CASARC_LOWMEM / CASARC_HIGHMEM; see
+        docs/reference/casa_rc.md). None (default) passes none.
     db_path:
         Path to serpens_v2.db (defaults to config.DB_PATH).
     """
     logger = get_run_logger()
     db_path = db_path or str(DB_PATH)
     run_id  = str(uuid.uuid4())
+
+    casarc_env(casarc)  # a missing rc file fails here, before the unit is marked running
 
     check_unit_not_running(source, band, config, robust)
     imaging_unit_id, current_state = validate_imaging_ready(source, band, config, robust, db_path, force)
@@ -275,7 +287,7 @@ def imaging_unit_flow(
     mark_imaging_running(imaging_unit_id, current_state, run_id, db_path)
 
     try:
-        launch_imaging_session(payload_path, source, band, config, robust, ncores, ram_gb)
+        launch_imaging_session(payload_path, source, band, config, robust, ncores, ram_gb, casarc)
     except Exception as e:
         logger.error(f"[{source} B{band} {config}] Session launch failed — recording failure: {e}")
         conn = db.get_connection(db_path)
@@ -304,6 +316,7 @@ if __name__ == "__main__":
     parser.add_argument("--ncores",  type=int, default=None, help="CPU cores (omit for flexible mode; >1 enables parallel tclean)")
     parser.add_argument("--ram-gb",  type=int, default=None, help="RAM in GB to pin (independent of --ncores; defaults to 16 when ncores is set)")
     parser.add_argument("--force",       action="store_true",                 help="Delete existing products and re-image")
+    parser.add_argument("--casarc",     default=None,                        help="CASA rc file to set as CASARCFILES in the session")
     parser.add_argument("--db-path",    default=None,                        help="Path to serpens_v2.db")
     args = parser.parse_args()
 
@@ -315,5 +328,6 @@ if __name__ == "__main__":
         ncores=args.ncores,
         ram_gb=args.ram_gb,
         force=args.force,
+        casarc=args.casarc,
         db_path=args.db_path,
     )

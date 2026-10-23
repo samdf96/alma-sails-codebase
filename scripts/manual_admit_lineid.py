@@ -22,6 +22,15 @@ cube, writes each identified line to line_admit_detection (review_status
 starts 'pending' -- see review_line_detections.py at the project root),
 and advances the line_admit_unit to 'complete'.
 
+Re-running a unit (--force, or a retry after a failed run) replaces its
+detections rather than adding a second set beside them: the old rows are
+deleted and the new ones inserted in one transaction once ADMIT succeeds,
+and the replaced rows are kept in the run's line_admit_run_log payload. A
+unit with any human-reviewed detection (confirmed, or rejected other than
+by review_line_detections.py --reject-below) or one with a deep
+line-imaging unit is refused before ADMIT runs -- a re-run would discard
+that review, so it has to be dealt with by hand first.
+
 Deletes ADMIT's own duplicate copy of the input cube (*-incube.im) after a
 successful run -- measured at ~99% of the triage cube's size, pure
 duplication since the source triage cube is untouched. Does NOT delete the
@@ -114,6 +123,18 @@ def main() -> None:
         conn.close()
         return
 
+    blocking = db.get_line_admit_detections_blocking_rerun(conn, unit_id)
+    if blocking:
+        print(f"[ERROR] This unit has {len(blocking)} reviewed or deep-imaged detection(s); "
+              f"re-running ADMIT would replace them and lose that review:")
+        for r in blocking:
+            extra = f", line_imaging_unit {r['line_imaging_unit_id']}" if r["line_imaging_unit_id"] else ""
+            print(f"  det {r['line_admit_detection_id']}  {r['formula']}  {r['frequency_ghz']:.4f} GHz  "
+                  f"{r['review_status']}{extra}")
+        print("Deal with these by hand (record the reviews, remove any line-imaging unit) before re-running.")
+        conn.close()
+        sys.exit(1)
+
     run_id = str(uuid.uuid4())
     db.record_line_admit_transition(
         conn, unit_id, from_state=current_state, to_state="running",
@@ -127,7 +148,7 @@ def main() -> None:
 
         result = run_admit_lineid(cube_fits, vlsr_kms)
         detections = parse_lltable(result["lltable_path"])
-        db.insert_line_admit_detections(conn, unit_id, detections)
+        replaced = db.replace_line_admit_detections(conn, unit_id, detections)
         purge_incube_copy(result["projdir"])
     except Exception:
         err = traceback.format_exc()
@@ -144,11 +165,17 @@ def main() -> None:
         "lltable_path": result["lltable_path"],
         "n_detections": len(detections),
     }
+    payload = {"admit_products": admit_products}
+    if replaced:
+        payload["replaced_detections"] = replaced
     db.record_line_admit_transition(
         conn, unit_id, from_state="running", to_state="complete",
-        run_id=run_id, note="admit line-id complete", step="complete",
+        run_id=run_id,
+        note="admit line-id complete" + (f" (replaced {len(replaced)} earlier detection(s))"
+                                         if replaced else ""),
+        step="complete",
         admit_products=admit_products,
-        payload={"admit_products": admit_products},
+        payload=payload,
     )
     conn.close()
 

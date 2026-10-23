@@ -26,6 +26,7 @@ echo "[headless-admit-lineid] source   : $SOURCE"
 echo "[headless-admit-lineid] spw      : $SPW"
 echo "[headless-admit-lineid] db_path  : $DB_PATH"
 echo "[headless-admit-lineid] force    : ${FORCE:-0}"
+echo "[headless-admit-lineid] CASARCFILES : ${CASARCFILES:-<unset>}"
 
 EXTRA_ARGS=()
 if [ "$FORCE" = "1" ]; then

@@ -44,7 +44,7 @@ from prefect import flow, get_run_logger, task
 from alma_ops import db
 from alma_ops.config import CASA_IMAGE, DB_PATH
 from alma_ops.db import CANONICAL_PREFIX
-from canfar_utils import create_checked, key_admit, make_session, report_launch
+from canfar_utils import casarc_env, create_checked, key_admit, make_session, report_launch
 
 _HEADLESS_SCRIPT = f"{CANONICAL_PREFIX}/alma-sails-codebase/scripts/headless_admit_lineid.sh"
 
@@ -88,12 +88,14 @@ def launch_admit_lineid_session(
     db_path: str,
     force: bool,
     ram_gb: Optional[int],
+    casarc: Optional[str] = None,
 ) -> str:
     """Submit a CASA pipeline headless session to run ADMIT line identification.
 
     ram_gb=None (default) launches flexible: no cores/RAM pinned. ram_gb set
     to an int pins that much RAM only -- never cores, since ADMIT has no
     MPI/parallel awareness at all. Purely a CANFAR resource reservation.
+    casarc, if given, is set as CASARCFILES in the session.
     """
     logger = get_run_logger()
 
@@ -105,6 +107,9 @@ def launch_admit_lineid_session(
     kwargs = dict(image=CASA_IMAGE, cmd=_HEADLESS_SCRIPT, args=args)
     if ram_gb is not None:
         kwargs["ram"] = ram_gb
+    env = casarc_env(casarc)
+    if env:
+        kwargs["env"] = env
 
     session = make_session()
     result = create_checked(session, unit_key, **kwargs)
@@ -120,6 +125,7 @@ def admit_lineid_flow(
     spw: int,
     force: bool = False,
     ram_gb: Optional[int] = None,
+    casarc: Optional[str] = None,
     db_path: Optional[str] = None,
 ) -> None:
     """Run ADMIT line identification for one line-triage unit via a CANFAR headless session.
@@ -138,13 +144,16 @@ def admit_lineid_flow(
         RAM in GB to pin on the headless session. None (default) is flexible
         mode -- no cores/RAM pinned. Never pins cores; ADMIT has no
         MPI/parallel awareness.
+    casarc:
+        CASA rc file to set as CASARCFILES in the session (see
+        docs/reference/casa_rc.md). None (default) passes none.
     db_path:
         Path to the pipeline SQLite database (defaults to config.DB_PATH).
     """
     db_path = db_path or str(DB_PATH)
 
     validate_admit_ready(mous_id, source, spw, db_path)
-    launch_admit_lineid_session(mous_id, source, spw, db_path, force, ram_gb)
+    launch_admit_lineid_session(mous_id, source, spw, db_path, force, ram_gb, casarc)
 
 
 if __name__ == "__main__":
@@ -159,6 +168,8 @@ if __name__ == "__main__":
     parser.add_argument("--force",    action="store_true",    help="Re-run even if already complete")
     parser.add_argument("--ram-gb",   type=int, default=None,
                         help="Pin this much RAM on the session (default: flexible, no cores/RAM pinned)")
+    parser.add_argument("--casarc",   default=None,
+                        help="CASA rc file to set as CASARCFILES in the session")
     parser.add_argument("--db-path",  default=None,            help="Path to the SQLite database")
     args = parser.parse_args()
 
@@ -168,5 +179,6 @@ if __name__ == "__main__":
         spw=args.spw,
         force=args.force,
         ram_gb=args.ram_gb,
+        casarc=args.casarc,
         db_path=args.db_path,
     )

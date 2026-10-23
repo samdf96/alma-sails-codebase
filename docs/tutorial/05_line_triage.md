@@ -47,9 +47,14 @@ This step requires CASA.
 
     | Argument | Default | Description |
     |---|---|---|
-    | `--linewidth-floor-kms` | `1.0` | Minimum velocity resolution after binning |
+    | `--linewidth-floor-kms` | `0.3` | Narrowest line FWHM (km/s) protected by channel binning |
+    | `--taper-arcsec` | off | Image at this uv-tapered resolution instead of full resolution (see [Very large images](#very-large-images)) |
+    | `--allow-large` | off | Image above `TRIAGE_MAX_IMSIZE` at full resolution anyway |
     | `--force` | off | Re-image even if the unit is already `complete` |
-    | `--dry-run` | off | Print the plan without running tclean |
+    | `--dry-run` | off | Print the plan, image size and estimated memory/FITS size, without running tclean or touching the database |
+
+    For a large cube, run CASA with a memory-capping rc file:
+    `CASARCFILES=<rc file> casa ...` (see [CASA rc files](../reference/casa_rc.md)).
 
 === "Prefect (CANFAR)"
 
@@ -59,10 +64,41 @@ This step requires CASA.
         --param source=<source>
     ```
 
+    Optional parameters: `linewidth_floor_kms`, `spw`, `force`, `ram_gb`,
+    `taper_arcsec`, `allow_large`, and `casarc` (a CASA rc file set as
+    `CASARCFILES` in the session; see [CASA rc files](../reference/casa_rc.md)).
+
     !!! note
         Unlike most flows, `line_triage_flow` writes nothing to the database before
         submitting the session. The `line_triage_unit` rows for this MOUS only exist
-        once the headless session has classified the SPWs from `cont.dat`.
+        once the headless session has classified the SPWs from `cont.dat`. All
+        line-candidate SPWs get their rows (`ready`) at that point, before any
+        imaging, so a session killed partway through leaves the remaining SPWs
+        visible as `ready` rather than missing.
+
+---
+
+## Very large images
+
+The triage cube's cell and image size follow the data's resolution and primary
+beam. Long-baseline data can make that image enormous: the Serpens 0.015–0.03″
+data gave 8640–10000 px images, about 2–3 TB of `tclean` memory and 0.5–0.8 TB
+of FITS per SPW. A run refuses any image larger than `TRIAGE_MAX_IMSIZE`
+(4096 px, in `alma_ops/imaging/line_triage_config.py`) and suggests a taper.
+
+`--taper-arcsec T` images at a uv-tapered resolution of about `T` arcsec. The
+cell grows to match (`T / PIXELS_PER_BEAM`), while the image still covers the
+primary beam, so the image shrinks by roughly the square of the resolution
+ratio. ADMIT only needs the spectra to identify lines, and deep line imaging
+(Step 7) recomputes its own full-resolution geometry, so nothing downstream
+loses resolution. The taper, cell and image size are recorded in the unit's
+`triage_products` and in its completion note.
+
+Check the plan first with `--dry-run`: it prints the tapered and untapered
+geometry and an estimate of memory and FITS size per SPW.
+
+`--allow-large` images at full resolution anyway; pair it with a large pinned
+session and a high-memory rc file.
 
 ---
 

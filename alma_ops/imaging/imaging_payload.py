@@ -3,11 +3,11 @@ imaging_payload.py
 -------------------
 Build the JSON payload consumed by headless_continuum_imaging.py.
 
-Lives in alma_ops rather than in flows/ because two callers need it: the
-Prefect flow (imaging_flow.py) and batch_continuum_reimage.py, which launches
-CANFAR headless sessions directly without a Prefect server. Duplicating the
-MOUS/cont.dat/mosaic resolution in both would be a correctness hazard -- the
-is_mosaic determination in particular is subtle (see the comment inline).
+Lives in alma_ops rather than in flows/ so that any launcher can build the
+payload -- the Prefect flow (imaging_flow.py), or one that submits CANFAR
+headless sessions directly without a Prefect server. Duplicating the
+MOUS/cont.dat/mosaic resolution per launcher would be a correctness hazard --
+the is_mosaic determination in particular is subtle (see the comment inline).
 """
 
 from __future__ import annotations
@@ -153,9 +153,9 @@ def clear_existing_products(conn, imaging_unit_id: int, robust: float,
     moves the mfs reference frequency, so every pre-fix product trips this. The
     old products must go before a re-run, not merely be overwritten.
 
-    Shared by imaging_flow.py's validate task and batch_continuum_reimage.py --
-    the latter launches CANFAR sessions directly and does not go through the
-    flow's validation, so without this it submits jobs that fail on arrival.
+    Used by imaging_flow.py's validate task. A launcher that submits sessions
+    directly, without the flow's validation, must call it too, or its jobs
+    fail on arrival.
     """
     from pathlib import Path
 

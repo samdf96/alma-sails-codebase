@@ -45,7 +45,7 @@ from alma_ops import db
 from alma_ops.config import CASA_IMAGE, DB_PATH
 from alma_ops.db import CANONICAL_PREFIX
 from alma_ops.imaging.continuum_config import DEFAULT_ROBUST
-from canfar_utils import create_checked, key_line_imaging, make_session, report_launch, resource_desc
+from canfar_utils import casarc_env, create_checked, key_line_imaging, make_session, report_launch, resource_desc
 
 _HEADLESS_SCRIPT = f"{CANONICAL_PREFIX}/alma-sails-codebase/scripts/headless_line_imaging.sh"
 
@@ -88,6 +88,7 @@ def launch_line_imaging_session(
     ncores: Optional[int],
     ram_gb: Optional[int],
     robust: Optional[float] = None,
+    casarc: Optional[str] = None,
 ) -> str:
     """Submit a CASA pipeline headless session to run deep line imaging.
 
@@ -96,6 +97,10 @@ def launch_line_imaging_session(
     launches in fixed mode: cores/RAM pinned via session.create(), and
     manual_line_imaging.py runs mpicasa -n ncores with parallel=True threaded
     through to tclean.
+
+    The session args are detection_id and db_path followed by named options
+    for manual_line_imaging.py; casarc, if given, is set as CASARCFILES in
+    the session.
     """
     logger = get_run_logger()
 
@@ -106,9 +111,14 @@ def launch_line_imaging_session(
     unit_key = key_line_imaging(
         detection_id, DEFAULT_ROBUST if robust is None else robust)
 
-    args = (f"{detection_id} {canonical_db_path} {'1' if force else ''} "
-            f"{ncores if ncores is not None else 0}"
-            f"{'' if robust is None else f' {robust}'}")
+    opts = []
+    if force:
+        opts.append("--force")
+    if ncores is not None:
+        opts.append(f"--ncores {ncores}")
+    if robust is not None:
+        opts.append(f"--robust {robust}")
+    args = f"{detection_id} {canonical_db_path} " + " ".join(opts)
 
     kwargs = dict(image=CASA_IMAGE, cmd=_HEADLESS_SCRIPT, args=args)
     if ncores is not None:
@@ -117,6 +127,9 @@ def launch_line_imaging_session(
         _PARALLEL_RAM_GB if ncores is not None else None)
     if effective_ram is not None:
         kwargs["ram"] = effective_ram
+    env = casarc_env(casarc)
+    if env:
+        kwargs["env"] = env
 
     session = make_session()
     result = create_checked(session, unit_key, **kwargs)
@@ -132,6 +145,7 @@ def line_imaging_flow(
     ncores: Optional[int] = None,
     ram_gb: Optional[int] = None,
     robust: Optional[float] = None,
+    casarc: Optional[str] = None,
     db_path: Optional[str] = None,
 ) -> None:
     """Run deep line imaging for one confirmed ADMIT detection via a CANFAR
@@ -158,6 +172,10 @@ def line_imaging_flow(
     ram_gb:
         RAM in GB to pin on the headless session, independently of ncores --
         pinning RAM alone is valid. Defaults to 16 GB when ncores is set.
+    casarc:
+        CASA rc file to set as CASARCFILES in the session, e.g. to cap
+        tclean's memory (presets config.CASARC_LOWMEM / CASARC_HIGHMEM; see
+        docs/reference/casa_rc.md). None (default) passes none.
     db_path:
         Path to the pipeline SQLite database (defaults to config.DB_PATH).
     """
@@ -165,7 +183,7 @@ def line_imaging_flow(
 
     validate_line_imaging_ready(detection_id, db_path)
     launch_line_imaging_session(detection_id, db_path, force, ncores, ram_gb,
-                                robust)
+                                robust, casarc)
 
 
 if __name__ == "__main__":
@@ -183,6 +201,8 @@ if __name__ == "__main__":
     parser.add_argument("--robust",   type=float, default=None,
                         help="Briggs robust weighting (default: 0.5). Output names "
                              "carry it as _r05/_r20, so weightings do not overwrite.")
+    parser.add_argument("--casarc",   default=None,
+                        help="CASA rc file to set as CASARCFILES in the session")
     parser.add_argument("--db-path",  default=None,            help="Path to the SQLite database")
     args = parser.parse_args()
 
@@ -192,5 +212,6 @@ if __name__ == "__main__":
         ncores=args.ncores,
         ram_gb=args.ram_gb,
         robust=args.robust,
+        casarc=args.casarc,
         db_path=args.db_path,
     )

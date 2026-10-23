@@ -10,6 +10,8 @@ Run from a CANFAR c-casa container:
         --source Serpens_Main \\
         [--spw 3] \\
         [--linewidth-floor-kms 0.3] \\
+        [--taper-arcsec 0.15] \\
+        [--allow-large] \\
         [--force] \\
         [--dry-run] \\
         [--keep-casa-products] \\
@@ -29,11 +31,25 @@ makes per-channel S/N harder to judge when scanning for lines.
 
 The MOUS must be in pipeline state 'selfcal_complete'. Output is written to
 imaging/lines/triage/<source>/B<band>_<config>/.
+
+Every line-candidate spw gets its line_triage_unit row ('ready') as soon as
+it is classified, before any imaging. A session killed partway through then
+leaves the remaining spws visible as 'ready', so the source is offered for a
+re-run; creating rows only as the loop reached them left 13 spws in 5
+MOUSes with no row at all after their runs died (found 2026-10-21).
+
+Image size: before imaging, the cell/imsize plan and a rough tclean memory
+and FITS size per spw are printed (also under --dry-run). An image larger
+than TRIAGE_MAX_IMSIZE px is refused unless --taper-arcsec is given (image
+at that uv-tapered resolution, with a matching cell) or --allow-large
+(image at full resolution anyway). The taper and cell are recorded in
+triage_products.
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import traceback
 import uuid
@@ -44,7 +60,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from alma_ops import db
 from alma_ops.config import DB_PATH, LINE_TRIAGE_DIR
-from alma_ops.imaging.line_triage_config import THERMAL_LINEWIDTH_FLOOR_KMS
+from alma_ops.imaging.line_triage_config import THERMAL_LINEWIDTH_FLOOR_KMS, TRIAGE_MAX_IMSIZE
 from alma_ops.utils import to_dir_mous_id
 
 
@@ -59,6 +75,13 @@ def main() -> None:
         "--linewidth-floor-kms", type=float, default=THERMAL_LINEWIDTH_FLOOR_KMS,
         help=f"Narrowest protected line FWHM in km/s (default {THERMAL_LINEWIDTH_FLOOR_KMS})",
     )
+    parser.add_argument(
+        "--taper-arcsec", type=float, default=None,
+        help="Image at this uv-tapered resolution (arcsec), with a cell to match, instead of the "
+             "array's full resolution. For long-baseline data whose triage image would be huge.",
+    )
+    parser.add_argument("--allow-large", action="store_true",
+                        help=f"Image at full resolution even if the image exceeds {TRIAGE_MAX_IMSIZE} px")
     parser.add_argument("--force", action="store_true", help="Re-image spws already marked 'complete'")
     parser.add_argument("--dry-run", action="store_true", help="Print the imaging plan without running tclean")
     parser.add_argument("--keep-casa-products", action="store_true",
@@ -113,7 +136,9 @@ def main() -> None:
         sys.exit(1)
 
     # --- Classify spws ---
-    from alma_ops.imaging.line_triage_utils import classify_spws, compute_bin_factor
+    from alma_ops.imaging.line_triage_utils import (
+        classify_spws, compute_bin_factor, estimate_triage_footprint, plan_triage_geometry,
+    )
 
     classification = classify_spws(cont_dat, args.source, ms_paths[0])
     line_spws = sorted(idx for idx, cls in classification.items() if cls == "line")
@@ -135,6 +160,10 @@ def main() -> None:
           f"(continuum: {sorted(i for i, c in classification.items() if c == 'continuum')}, "
           f"line candidates: {line_spws})")
 
+    if not line_spws and args.dry_run:
+        print("\n[DRY RUN] No line-candidate spws -- a real run would record the continuum-only sentinel.")
+        conn.close()
+        return
     if not line_spws:
         unit_id = db.get_or_create_line_triage_unit(conn, args.mous_id, args.source, -1)
         sentinel_state = db.get_line_triage_pipeline_state(conn, unit_id)["current_state"]
@@ -155,22 +184,54 @@ def main() -> None:
         conn.close()
         return
 
+    print("  [params] computing cell size and image size …", flush=True)
+    geometry = plan_triage_geometry(ms_paths, args.source, is_mosaic=is_mosaic,
+                                    taper_arcsec=args.taper_arcsec)
+    print(f"  geometry    : cell={geometry['cell']}  imsize={geometry['imsize']}"
+          + (f"  uvtaper={geometry['taper_arcsec']}arcsec  (untapered: cell="
+             f"{geometry['native_cell']}  imsize={geometry['native_imsize']})"
+             if geometry["taper_arcsec"] else ""), flush=True)
+
+    too_large = (geometry["imsize"] > TRIAGE_MAX_IMSIZE and args.taper_arcsec is None
+                 and not args.allow_large)
+    if too_large:
+        from alma_ops.imaging.continuum_config import PIXELS_PER_BEAM
+        extent = geometry["imsize"] * float(geometry["cell"].replace("arcsec", ""))
+        suggest = math.ceil(extent / 2048 * PIXELS_PER_BEAM * 20) / 20
+        msg = (f"imsize {geometry['imsize']} px exceeds TRIAGE_MAX_IMSIZE={TRIAGE_MAX_IMSIZE}. "
+               f"Pass --taper-arcsec (about {suggest} gives a ~2048 px image) or --allow-large "
+               f"to image at full resolution.")
+        if not args.dry_run:
+            print(f"[ERROR] {msg}")
+            conn.close()
+            sys.exit(1)
+        print(f"  [WARNING] a real run would refuse: {msg}")
+
+    bin_infos = {}
+    for spw_idx in line_spws:
+        bin_info = compute_bin_factor(ms_paths[0], spw_idx, linewidth_floor_kms=args.linewidth_floor_kms)
+        bin_infos[spw_idx] = bin_info
+        native_width_kms = bin_info["native_chanwidth_hz"] / bin_info["center_freq_hz"] * 299_792.458
+        size = estimate_triage_footprint(geometry["imsize"], bin_info["nchan"])
+        print(f"  [spw {spw_idx}] native_chanwidth={native_width_kms:.4f} km/s  "
+              f"bin_factor={bin_info['bin_factor']}  nchan={bin_info['nchan']}  "
+              f"center_freq={bin_info['center_freq_hz'] / 1e9:.3f} GHz  "
+              f"~tclean {size['tclean_gb']:.0f} GB, ~FITS {size['fits_gb']:.1f} GB")
+
+    if args.dry_run:
+        conn.close()
+        print("\n[DRY RUN] No imaging run, no DB writes.")
+        return
+
+    # --- DB writes start here; nothing above this point touches the DB ---
     img_dir.mkdir(parents=True, exist_ok=True)
+    unit_ids = {spw_idx: db.get_or_create_line_triage_unit(conn, args.mous_id, args.source, spw_idx)
+                for spw_idx in line_spws}
 
     results = []
     for spw_idx in line_spws:
-        bin_info = compute_bin_factor(ms_paths[0], spw_idx, linewidth_floor_kms=args.linewidth_floor_kms)
-        native_width_kms = bin_info["native_chanwidth_hz"] / bin_info["center_freq_hz"] * 299_792.458
-        print(f"  [spw {spw_idx}] native_chanwidth={native_width_kms:.4f} km/s  "
-              f"bin_factor={bin_info['bin_factor']}  nchan={bin_info['nchan']}  "
-              f"center_freq={bin_info['center_freq_hz'] / 1e9:.3f} GHz")
-
-        if args.dry_run:
-            results.append((spw_idx, "dry-run"))
-            continue
-
-        # --- DB writes start here; nothing above this point touches the DB ---
-        unit_id = db.get_or_create_line_triage_unit(conn, args.mous_id, args.source, spw_idx)
+        bin_info = bin_infos[spw_idx]
+        unit_id = unit_ids[spw_idx]
         ips = db.get_line_triage_pipeline_state(conn, unit_id)
         current_state = ips["current_state"]
 
@@ -200,6 +261,7 @@ def main() -> None:
                 bin_factor=bin_info["bin_factor"],
                 is_mosaic=is_mosaic,
                 keep_casa_products=args.keep_casa_products,
+                geometry=geometry,
             )
         except Exception:
             err = traceback.format_exc()
@@ -221,7 +283,11 @@ def main() -> None:
 
         db.record_line_triage_transition(
             conn, unit_id, from_state="running", to_state="complete",
-            run_id=run_id, note="triage imaging complete", step="complete",
+            run_id=run_id,
+            note="triage imaging complete" + (f" (uv-tapered to {geometry['taper_arcsec']} arcsec, "
+                                              f"cell {geometry['cell']}, imsize {geometry['imsize']})"
+                                              if geometry["taper_arcsec"] else ""),
+            step="complete",
             triage_products=products_entry,
             payload={"triage_products": products_entry, "imaging_dir": str(img_dir)},
         )

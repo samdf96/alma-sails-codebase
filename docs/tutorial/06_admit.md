@@ -50,7 +50,7 @@ This step runs in a CASA environment (ADMIT is imported via a path inserted onto
 
     | Argument | Default | Description |
     |---|---|---|
-    | `--force` | off | Re-run even if a completed admit unit exists |
+    | `--force` | off | Re-run even if a completed admit unit exists. Replaces its detections; refused if any were reviewed by hand or have a deep line-imaging unit |
     | `--dry-run` | off | Print the plan without running ADMIT |
 
 === "Prefect (CANFAR)"

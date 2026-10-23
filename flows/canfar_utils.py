@@ -1,8 +1,8 @@
 """
 canfar_utils.py
 ---------------
-Shared helpers for CANFAR session creation, used by every Prefect flow and by
-the project-root batch_*.py launchers.
+Shared helpers for CANFAR session creation, used by every Prefect flow and
+by any other launcher that submits headless sessions directly.
 
 Three concerns live here, all of which must agree across every launcher:
   - which cluster a session goes to      (make_session)
@@ -10,8 +10,8 @@ Three concerns live here, all of which must agree across every launcher:
   - whether a session actually launched  (create_checked)
 
 The naming and launch guards are only effective if all callers share them --
-a flow that builds its own name cannot see a batch script's running session,
-which is the concurrency hole they exist to close.
+a launcher that builds its own name cannot see another launcher's running
+session, which is the concurrency hole they exist to close.
 
 The make_session() helper is the single place that decides which CANFAR
 server a session is submitted to. It uses the active selection of the user's
@@ -93,9 +93,9 @@ def make_session(timeout: int = HTTP_TIMEOUT_S) -> Session:
 # stable prefix of the name. Anything appended for readability alone would
 # break prefix matching -- don't.
 #
-# Flows and batch scripts MUST build identical unit_keys for the same work
-# unit, or a Prefect launch will not see a batch-launched session (and vice
-# versa). That is why the key builders live here rather than at each call site.
+# Every launcher MUST build identical unit_keys for the same work unit, or
+# one launcher will not see a session another one started. That is why the
+# key builders live here rather than at each call site.
 
 JOB_TS_FMT = "%Y%m%d-%H%M"
 
@@ -367,7 +367,7 @@ def report_launch(logger, prefix: str, what: str, result: LaunchResult) -> str:
     """Log a LaunchResult uniformly and return the job id ('' when unknown).
 
     `logger` is passed in rather than created here so this module stays free of
-    a Prefect dependency -- the batch_*.py launchers import it too.
+    a Prefect dependency -- launchers outside Prefect import it too.
     """
     job_id = result.ids[0] if result.ids else ""
     if result.outcome == "created":
@@ -383,7 +383,7 @@ def report_launch(logger, prefix: str, what: str, result: LaunchResult) -> str:
 
 
 def outcome_line(result: LaunchResult) -> str:
-    """One-line launch summary for the print()-based batch launchers."""
+    """One-line launch summary for launchers that report with print()."""
     job_id = result.ids[0] if result.ids else "?"
     if result.outcome == "created":
         return f"submitted ({job_id})"
@@ -407,6 +407,25 @@ def resource_desc(ncores: Optional[int], ram_gb: Optional[int]) -> str:
     return ", ".join(parts) + " pinned"
 
 
+def casarc_env(casarc: Optional[str]) -> dict:
+    """Session environment that hands CASA an rc file, for session.create(env=...).
+
+    The rc file is set as CASARCFILES, which CASA reads at startup -- most
+    importantly to cap tclean's memory (docs/reference/casa_rc.md). None means
+    no rc file: returns {}. The file must exist; a typo would otherwise launch
+    an uncapped session without complaint.
+    """
+    if casarc is None:
+        return {}
+    from pathlib import Path
+
+    from alma_ops.db import to_canonical, to_local
+    path = Path(to_local(str(casarc))).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"casarc file not found: {casarc}")
+    return {"CASARCFILES": to_canonical(str(path))}
+
+
 class UnitBusy(RuntimeError):
     """A live session already owns this work unit.
 
@@ -414,7 +433,7 @@ class UnitBusy(RuntimeError):
     destructive. create_checked()'s own preflight is not sufficient for that:
     it runs at launch time, by which point a caller may already have deleted the
     products the running session was working on. That is not hypothetical --
-    on 2026-08-30 a batch run cleared the live working set out from under two
+    on 2026-08-30 a re-imaging launch cleared the live working set out from under two
     tclean processes six hours into cleaning, and only then discovered they were
     running and declined to launch a duplicate.
     """

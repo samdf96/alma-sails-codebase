@@ -27,7 +27,7 @@ from prefect import flow, get_run_logger, task
 from alma_ops import db
 from alma_ops.config import CASA_IMAGE, DB_PATH
 from alma_ops.db import CANONICAL_PREFIX
-from canfar_utils import create_checked, key_split, make_session, report_launch
+from canfar_utils import casarc_env, create_checked, key_split, make_session, report_launch
 
 _HEADLESS_SCRIPT = f"{CANONICAL_PREFIX}/alma-sails-codebase/scripts/headless_split.sh"
 
@@ -55,8 +55,12 @@ def launch_split_session(
     mous_id: str,
     db_path: str,
     spw_override: Optional[str] = None,
+    casarc: Optional[str] = None,
 ) -> str:
-    """Submit a CASA pipeline headless session to run the split."""
+    """Submit a CASA pipeline headless session to run the split.
+
+    casarc, if given, is set as CASARCFILES in the session.
+    """
     logger = get_run_logger()
 
     canonical_db_path = db.to_canonical(db_path)
@@ -66,14 +70,13 @@ def launch_split_session(
     if spw_override:
         args = f"{args} {spw_override}"
 
+    kwargs = dict(image=CASA_IMAGE, cmd=_HEADLESS_SCRIPT, args=args)
+    env = casarc_env(casarc)
+    if env:
+        kwargs["env"] = env
+
     session = make_session()
-    result = create_checked(
-        session,
-        unit_key,
-        image=CASA_IMAGE,
-        cmd=_HEADLESS_SCRIPT,
-        args=args,
-    )
+    result = create_checked(session, unit_key, **kwargs)
 
     detail = f" (SPW override: {spw_override})" if spw_override else ""
     return report_launch(logger, f"[{mous_id}]", f"split{detail}", result)
@@ -84,6 +87,7 @@ def split_mous_flow(
     mous_id: str,
     db_path: Optional[str] = None,
     spw_override: Optional[str] = None,
+    casarc: Optional[str] = None,
 ) -> None:
     """Split a downloaded MOUS into target-only science SPW measurement sets.
 
@@ -97,11 +101,14 @@ def split_mous_flow(
         Comma-separated SPW IDs to use instead of the alminer_metadata lookup,
         e.g. ``"21,23,25,27,29"``. Use when alminer reports wrong SPW indices
         for a given MOUS.
+    casarc:
+        CASA rc file to set as CASARCFILES in the session (see
+        docs/reference/casa_rc.md). None (default) passes none.
     """
     db_path = db_path or str(DB_PATH)
 
     validate_downloaded_state(mous_id, db_path)
-    launch_split_session(mous_id, db_path, spw_override)
+    launch_split_session(mous_id, db_path, spw_override, casarc)
 
 
 if __name__ == "__main__":
@@ -113,10 +120,12 @@ if __name__ == "__main__":
     parser.add_argument("--mous-id",     required=True,       help="MOUS ID (uid://A001/...)")
     parser.add_argument("--db-path",     default=None,        help="Path to the SQLite database")
     parser.add_argument("--spw",         default=None,        help="Comma-separated SPW ID override, e.g. '21,23,25,27,29'")
+    parser.add_argument("--casarc",      default=None,        help="CASA rc file to set as CASARCFILES in the session")
     args = parser.parse_args()
 
     split_mous_flow(
         mous_id=args.mous_id,
         db_path=args.db_path,
         spw_override=args.spw,
+        casarc=args.casarc,
     )

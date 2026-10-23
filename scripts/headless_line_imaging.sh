@@ -4,54 +4,55 @@
 # CANFAR headless session entry point for deep (niter>0) line imaging of one
 # confirmed ADMIT detection. Runs inside a CASA pipeline (c-casa) container.
 #
-# Positional args (passed via session.create args=):
+# Args (passed via session.create args=):
 #   $1  detection_id  line_admit_detection_id
 #   $2  db_path       Canonical path to the pipeline SQLite database
-#   $3  force         (optional) "1" to re-run a unit already 'complete'
-#   $4  ncores        (optional) mpicasa cores; 0/unset = flexible/single-threaded
-#   $5  robust        (optional) Briggs robust weighting; unset = script default (0.5).
-#                     Output filenames carry the robust value (_r05 / _r20), so the
-#                     same detection can be imaged at several weightings side by side.
+#   $3...             Options passed through unchanged to manual_line_imaging.py,
+#                     e.g. --force --ncores 4 --robust 2.0
+#
+# Options are named, matching manual_line_imaging.py's own CLI, because session
+# args arrive as one whitespace-split string: an empty optional positional
+# vanishes and shifts everything after it. (The earlier positional form lost
+# --robust and ran ncores>1 jobs single-threaded whenever force was off.)
 #
 # Unlike ADMIT (no MPI awareness at all), deep line imaging genuinely threads
-# parallel= through to tclean, so this branches on ncores the same way
-# headless_imaging.sh does for continuum.
+# parallel= through to tclean, so with --ncores N > 1 this runs under
+# mpicasa -n N, the same way headless_imaging.sh does for continuum.
+#
+# A CASA rc file can be passed by setting CASARCFILES in the session
+# environment (the flow's casarc=); CASA reads it itself. See
+# docs/reference/casa_rc.md.
 
 set -euo pipefail
 
 DETECTION_ID="$1"
 DB_PATH="$2"
-FORCE="${3:-}"
-NCORES="${4:-0}"
-ROBUST="${5:-}"
+shift 2
+
+NCORES=0
+prev=""
+for arg in "$@"; do
+    [ "$prev" = "--ncores" ] && NCORES="$arg"
+    prev="$arg"
+done
 
 CODEBASE_DIR="/arc/projects/ALMA-SAILS/alma-sails-codebase"
 
 echo "[headless-line-imaging] detection_id : $DETECTION_ID"
 echo "[headless-line-imaging] db_path      : $DB_PATH"
-echo "[headless-line-imaging] force        : ${FORCE:-0}"
-echo "[headless-line-imaging] ncores       : $NCORES"
-echo "[headless-line-imaging] robust       : ${ROBUST:-default}"
-
-EXTRA_ARGS=()
-if [ "$FORCE" = "1" ]; then
-    EXTRA_ARGS+=(--force)
-fi
-if [ -n "$ROBUST" ]; then
-    EXTRA_ARGS+=(--robust "$ROBUST")
-fi
+echo "[headless-line-imaging] options      : ${*:-<none>}"
+echo "[headless-line-imaging] CASARCFILES  : ${CASARCFILES:-<unset>}"
 
 if [ "$NCORES" -gt 1 ]; then
     mpicasa -n "$NCORES" casa --nologger --nogui \
         -c "${CODEBASE_DIR}/scripts/manual_line_imaging.py" \
         --detection-id "${DETECTION_ID}" \
         --db-path "${DB_PATH}" \
-        --ncores "${NCORES}" \
-        "${EXTRA_ARGS[@]}"
+        "$@"
 else
     casa --nologger --nogui \
         -c "${CODEBASE_DIR}/scripts/manual_line_imaging.py" \
         --detection-id "${DETECTION_ID}" \
         --db-path "${DB_PATH}" \
-        "${EXTRA_ARGS[@]}"
+        "$@"
 fi
