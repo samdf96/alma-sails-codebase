@@ -83,11 +83,10 @@ alma-sails-codebase/
 │   ├── headless_line_triage_imaging.sh # Headless entry point for triage flow
 │   ├── headless_admit_lineid.sh        # Headless entry point for ADMIT flow
 │   ├── headless_line_imaging.sh        # Headless entry point for deep line-imaging flow
-│   ├── seed_database.py        # One-time DB seeding from ALMiner metadata
-│   ├── migrate_add_field_selection_columns.py  # One-time: mosaic field-selection columns
-│   ├── migrate_add_line_triage_tables.py       # One-time: line_triage_* tables
-│   ├── migrate_add_admit_tables.py             # One-time: line_admit_* tables + targets.vlsr_kms
-│   └── migrate_add_line_imaging_tables.py      # One-time: line_imaging_* tables
+│   ├── init_database.py        # Create a new DB from schema/schema.sql, or --check one against it
+│   └── seed_database.py        # One-time DB seeding from ALMiner metadata
+├── schema/
+│   └── schema.sql              # The complete database schema (single source of truth)
 ├── DEVLOG.md                   # Architecture decisions, design notes, planned work
 ├── OPERATIONS.md               # Prefect server, workers, and deployment setup
 └── pyproject.toml
@@ -118,6 +117,8 @@ The SQLite database (`db/serpens_v2.db`) is organized in three layers:
 **Event layer** — append-only audit trail:
 - `state_transitions` / `imaging_state_transitions` / `line_triage_state_transitions` / `line_admit_state_transitions` / `line_imaging_state_transitions` — every FSM state change
 - `run_log` / `imaging_run_log` / `line_triage_run_log` / `line_admit_run_log` / `line_imaging_run_log` — step-level diagnostic payloads
+
+Every table is defined in `schema/schema.sql`; `scripts/init_database.py` builds a new database from it and `--check` compares an existing one. The SCOUSE tables (`scouse_unit`, `scouse_pipeline_state`, `scouse_state_transitions`, `scouse_cluster`) and `line_imaging_window_override` are documented there.
 
 Paths in the database are stored in canonical form (`/arc/projects/ALMA-SAILS/...`) and translated to the local prefix at read time. See `alma_ops/db.py` for the translation logic.
 

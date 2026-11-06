@@ -1,16 +1,18 @@
 """
 seed_database.py
 ----------------
-Populates a freshly created v2 database from a normalized ALMiner CSV export.
+Populates a freshly created database from a normalized ALMiner CSV export.
 
-The database must already exist and have been initialized from the schema:
-    sqlite3 <db_path> < schemas/serpens_pipeline_v2.sql
+The database must already exist, created from schema/schema.sql:
+    python3 alma-sails-codebase/scripts/init_database.py --db-path <db_path>
 
 Seeding order:
     1.  alminer_metadata         — raw CSV rows, one per (MOUS, target, spectral window)
     2.  projects                 — unique project_code rows
     3.  mous                     — unique MOUS rows, with band and array_config inferred
-    4.  targets                  — unique (mous_id, alma_source_name) rows
+    4.  targets                  — unique (mous_id, alma_source_name) rows, each with
+                                   vlsr_kms = --vlsr-kms (edit per target afterwards if
+                                   the survey spans clouds at different velocities)
     5.  pipeline_state           — one pending row per MOUS
     6.  state_transitions        — one initial NULL→pending entry per MOUS
     7.  imaging_unit             — unique (target_name, band, config_type) combinations
@@ -19,7 +21,10 @@ Seeding order:
     10. imaging_state_transitions — one initial NULL→pending entry per imaging unit
 
 Usage:
-    python alma-sails-codebase/scripts/seed_database.py <csv_path> --db-path <db_path>
+    python alma-sails-codebase/scripts/seed_database.py <csv_path> --db-path <db_path> --vlsr-kms 8.5
+
+--vlsr-kms is required: ADMIT and deep line imaging refuse a target without a vlsr.
+8.5 km/s is the Serpens value.
 """
 
 import argparse
@@ -154,7 +159,7 @@ def infer_band(band_list) -> str:
 # Main seeding function
 # -----------------------------------------------------------------------------
 
-def seed(csv_path: str, db_path: str) -> None:
+def seed(csv_path: str, db_path: str, vlsr_kms: float) -> None:
     df = pd.read_csv(csv_path)
     df.columns = df.columns.str.strip()
 
@@ -209,7 +214,8 @@ def seed(csv_path: str, db_path: str) -> None:
         # 4. targets — one row per unique (mous_id, alma_source_name)
         # ------------------------------------------------------------------
         tgt_cols = [c for c in TARGET_COLS if c in df.columns]
-        targets_df = df[tgt_cols].drop_duplicates(subset=["mous_id", "alma_source_name"])
+        targets_df = df[tgt_cols].drop_duplicates(subset=["mous_id", "alma_source_name"]).copy()
+        targets_df["vlsr_kms"] = vlsr_kms
         targets_df.to_sql("targets", conn, if_exists="append", index=False)
         print(f"targets: {len(targets_df)} rows inserted")
 
@@ -301,9 +307,11 @@ def seed(csv_path: str, db_path: str) -> None:
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Seed the v2 ALMA-SAILS database from an ALMiner CSV export.")
+    parser = argparse.ArgumentParser(description="Seed a new ALMA-SAILS database from an ALMiner CSV export.")
     parser.add_argument("csv_path", help="Path to the ALMiner metadata CSV file")
     parser.add_argument("--db-path", required=True, help="Path to the initialized SQLite database")
+    parser.add_argument("--vlsr-kms", type=float, required=True,
+                        help="Systemic velocity (km/s, LSRK) written to every target, e.g. 8.5 for Serpens")
     args = parser.parse_args()
 
-    seed(csv_path=args.csv_path, db_path=args.db_path)
+    seed(csv_path=args.csv_path, db_path=args.db_path, vlsr_kms=args.vlsr_kms)

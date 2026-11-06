@@ -94,8 +94,8 @@ def main() -> None:
         None,
     )
     if target_row is None or target_row["vlsr_kms"] is None:
-        print(f"[ERROR] No vlsr_kms set for source '{args.source}' — run migrate_add_admit_tables.py "
-              f"and check targets.vlsr_kms.")
+        print(f"[ERROR] No vlsr_kms set for source '{args.source}' — set targets.vlsr_kms "
+              f"(seed_database.py --vlsr-kms writes it for every target).")
         conn.close()
         sys.exit(1)
     vlsr_kms = target_row["vlsr_kms"]

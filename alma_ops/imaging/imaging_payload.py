@@ -53,7 +53,7 @@ def build_imaging_payload(
 
         # source_field_name/field_ids are usually NULL -- only set for imaging
         # units that select a subset of fields out of a shared-name mosaic
-        # MOUS (see migrate_add_field_selection_columns.py).
+        # MOUS (see mous_imaging_unit in schema/schema.sql).
         source_field_name = row["source_field_name"]
         field_ids = json.loads(row["field_ids"]) if row["field_ids"] else None
 

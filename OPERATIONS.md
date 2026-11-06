@@ -169,29 +169,27 @@ Add `--force` if it doesn't prompt. Choose CADC as the provider and authenticate
 
 ## Bootstrapping the Database
 
-A fresh `serpens_v2.db` needs to be created from the schema and seeded from an ALMiner metadata export before any pipeline step can run. From the project root:
+A new database is built from the complete schema in `schema/schema.sql` and seeded from an ALMiner metadata export before any pipeline step can run. From the project root:
 
 ```bash
-sqlite3 db/serpens_v2.db < schemas/serpens_pipeline_v2.sql
+python alma-sails-codebase/scripts/init_database.py --db-path db/serpens_v2.db
+python alma-sails-codebase/scripts/seed_database.py <path-to-alminer-export.csv> \
+    --db-path db/serpens_v2.db --vlsr-kms 8.5
 ```
 
-Then seed it from an ALMiner query export (CSV):
+`init_database.py` creates every table the pipeline uses, through SCOUSE, and refuses a file that already holds tables. `seed_database.py` populates the reference layer (`alminer_metadata`, `projects`, `mous`, `targets`) and writes the initial `pending` rows and NULL→`pending` transitions for both FSMs (`pipeline_state`/`state_transitions` and `imaging_unit`/`imaging_pipeline_state`/`imaging_state_transitions`); see its docstring for the exact order. `--vlsr-kms` is written to every target (8.5 km/s for Serpens) and is required: ADMIT and deep line imaging refuse a target without one. Everything beyond those initial rows is written by the pipeline itself as MOUSes progress.
+
+Serpens' ALMiner export is `db/seed_inputs/serpens_main_metadata.csv`. Seeding it gives the 168 imaging units ALMiner implies; the live database has more because mosaic MOUSes were later split into per-field units by a one-off script (`_archive/backfill_mosaic_field_imaging_units.py` in the project root).
+
+### Changing the schema
+
+`schema/schema.sql` is the single source of truth. A change means editing it **and** applying the same change to the live database by hand (`ALTER TABLE` / `CREATE TABLE`, after a backup), then confirming the two agree:
 
 ```bash
-python alma-sails-codebase/scripts/seed_database.py <path-to-alminer-export.csv> --db-path db/serpens_v2.db
+python alma-sails-codebase/scripts/init_database.py --check     # defaults to config.DB_PATH
 ```
 
-This populates the reference layer (`alminer_metadata`, `projects`, `mous`, `targets`) *and* writes the initial `pending` rows and NULL→`pending` transitions for both FSMs (`pipeline_state`/`state_transitions` and `imaging_unit`/`imaging_pipeline_state`/`imaging_state_transitions`) — see `seed_database.py`'s own docstring for the exact seeding order. Everything beyond those initial rows is written by the pipeline itself as MOUSes progress.
-
-Finally, apply the schema migrations that came after the base schema — these add tables/columns for later pipeline stages (line-triage, ADMIT, mosaic field selection) that aren't in `schemas/serpens_pipeline_v2.sql` itself:
-
-```bash
-python alma-sails-codebase/scripts/migrate_add_line_triage_tables.py
-python alma-sails-codebase/scripts/migrate_add_field_selection_columns.py
-python alma-sails-codebase/scripts/migrate_add_admit_tables.py
-```
-
-All three are idempotent, but **`migrate_add_admit_tables.py` must run after `seed_database.py`, not before** — it backfills `targets.vlsr_kms` for every existing row (`UPDATE targets SET vlsr_kms = 8.5`), which silently does nothing useful if `targets` is still empty. The other two are pure DDL (new tables / nullable columns) and aren't order-sensitive, but keeping all three together after seeding is the simplest correct sequence to remember. As new pipeline stages add their own tables in the future, expect this list to grow with the same pattern rather than being folded into the base schema file.
+`--check` compares tables, columns (order, type, NOT NULL, default, key), foreign keys, unique constraints and indexes, and exits 1 on any difference. New columns go at the end of their table in `schema.sql`, which is where `ALTER TABLE ADD COLUMN` puts them in the live database. No migration scripts are kept; the earlier ones are retired to `_archive/codebase_one_offs_20261106/` in the project root.
 
 ---
 
