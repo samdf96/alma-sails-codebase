@@ -20,6 +20,7 @@ LINE_IMAGING_DIR       = PROJECT_ROOT / "imaging" / "lines"
 LINE_TRIAGE_DIR        = LINE_IMAGING_DIR / "triage"
 LINE_FINAL_DIR         = LINE_IMAGING_DIR / "final"
 SCOUSE_DIR             = LINE_IMAGING_DIR / "scouse"
+SCOUSE_SUMMARY_DIR     = SCOUSE_DIR / "summary_pdfs"   # shared copy of every unit's summary PDF
 SRDP_WEBLOG_DIR        = PROJECT_ROOT / "SRDP_weblogs"
 
 # Preset CASA rc files, for passing to a headless session as CASARCFILES
@@ -30,6 +31,9 @@ SRDP_WEBLOG_DIR        = PROJECT_ROOT / "SRDP_weblogs"
 CODEBASE_ROOT  = Path(__file__).resolve().parents[1]
 CASARC_LOWMEM  = CODEBASE_ROOT / "casarc" / "casa_lowmem.rc"
 CASARC_HIGHMEM = CODEBASE_ROOT / "casarc" / "casa_highmem.rc"
+
+# The complete database schema; scripts/init_database.py builds and checks against it.
+SCHEMA_PATH = CODEBASE_ROOT / "schema" / "schema.sql"
 
 # Container images
 CASA_IMAGE    = "images.canfar.net/casa-6/casa:6.5.4-9-pipeline"
@@ -43,3 +47,7 @@ AUTO_SELFCAL_SCRIPT = PROJECT_ROOT / "auto_selfcal" / "bin" / "auto_selfcal.py"
 # front of sys.path. See admit_local_patches.diff at the project root for
 # the local Python-3-compatibility fixes this checkout needs (not upstream).
 ADMIT_ROOT = PROJECT_ROOT / "admit"
+
+# Distance used for physical scales in summary figures (au scale bars, km/s/pc
+# gradients). Serpens Main / W40, Ortiz-Leon et al. 2017.
+SURVEY_DISTANCE_PC = 436.0

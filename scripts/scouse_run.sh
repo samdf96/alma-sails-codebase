@@ -2,27 +2,27 @@
 # scouse_run.sh
 # -------------
 # Entry point for all SCOUSE + ACORNS pipeline stages.  Sets the required
-# LD_LIBRARY_PATH for PyQt5 (stages 1, 2, 4) and invokes the correct stage
-# script via the structure_id_env venv python.
+# LD_LIBRARY_PATH for PyQt5 (the GUIs) and invokes the correct stage script via
+# the structure_id_env venv python.  Every stage script takes --unit-id N, or
+# --source with --line-label.
 #
-# Run from the project root, from inside a CASA container terminal launched
-# via the CANFAR Science Portal desktop session (stages 1, 2, 4 require a
-# live display; stages 3 and acorns are headless and can run in any terminal):
+# Run from the project root, from inside a CASA container terminal.  Stage 1 is
+# always a GUI (Desktop session).  Stages 2 and 4 are headless unless given
+# --interactive (then they need a Desktop session too); stage 3, acorns and pdf
+# are always headless.  batch_scouse.py runs stages 2-4 and acorns as CANFAR
+# headless sessions (via headless_scouse.sh), so by hand you normally only run
+# stage 1:
 #
 #   alma-sails-codebase/scripts/scouse_run.sh \
 #       --stage 1 --source S68Nc --line-label "HC3N(10-9)"
 #
-#   alma-sails-codebase/scripts/scouse_run.sh \
-#       --stage 2 --source S68Nc --line-label "HC3N(10-9)"
+#   alma-sails-codebase/scripts/scouse_run.sh --stage 2 --unit-id 2 [--interactive]
+#   alma-sails-codebase/scripts/scouse_run.sh --stage 3 --unit-id 2 [--njobs 4]
+#   alma-sails-codebase/scripts/scouse_run.sh --stage 4 --unit-id 2 [--interactive]
+#   alma-sails-codebase/scripts/scouse_run.sh --stage acorns --unit-id 2
 #
-#   alma-sails-codebase/scripts/scouse_run.sh \
-#       --stage 3 --source S68Nc --line-label "HC3N(10-9)"
-#
-#   alma-sails-codebase/scripts/scouse_run.sh \
-#       --stage 4 --source S68Nc --line-label "HC3N(10-9)"
-#
-#   alma-sails-codebase/scripts/scouse_run.sh \
-#       --stage acorns --source S68Nc --line-label "HC3N(10-9)"
+#   # summary PDF of a complete unit (ACORNS already writes it)
+#   alma-sails-codebase/scripts/scouse_run.sh --stage pdf --unit-id 2
 
 set -euo pipefail
 
@@ -42,7 +42,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$STAGE" ]]; then
-    echo "[ERROR] --stage is required (1|2|3|4|acorns)" >&2
+    echo "[ERROR] --stage is required (1|2|3|4|acorns|pdf)" >&2
     exit 1
 fi
 
@@ -52,8 +52,9 @@ case "$STAGE" in
     3)      exec "$VENV" "$SCRIPTS/manual_scouse_stage3.py" "${PASSTHROUGH[@]}" ;;
     4)      exec "$VENV" "$SCRIPTS/manual_scouse_stage4.py" "${PASSTHROUGH[@]}" ;;
     acorns) exec "$VENV" "$SCRIPTS/manual_acorns_run.py"   "${PASSTHROUGH[@]}" ;;
+    pdf)    exec "$VENV" "$SCRIPTS/scouse_summary_pdf.py"  "${PASSTHROUGH[@]}" ;;
     *)
-        echo "[ERROR] Unknown stage '$STAGE'. Must be one of: 1 2 3 4 acorns" >&2
+        echo "[ERROR] Unknown stage '$STAGE'. Must be one of: 1 2 3 4 acorns pdf" >&2
         exit 1
         ;;
 esac

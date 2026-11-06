@@ -180,6 +180,22 @@ def key_admit(mous_id, source, spw) -> str:
     return f"admit-{mous_tag(mous_id)}-{safe(source)}-spw{int(spw)}"
 
 
+def key_scouse_unit(scouse_unit_id) -> str:
+    """Prefix shared by every stage session of one SCOUSE unit.
+
+    Stages of a unit run one at a time, so launchers look up live sessions on this
+    prefix rather than on a single stage's key. The trailing '-' that live_sessions
+    appends keeps 'scouse-u1' from matching 'scouse-u12'.
+    """
+    return f"scouse-u{int(scouse_unit_id)}"
+
+
+def key_scouse(scouse_unit_id, stage) -> str:
+    """'scouse-u6-s3', 'scouse-u6-acorns': one SCOUSE stage of one unit."""
+    tag = "acorns" if str(stage) == "acorns" else f"s{safe(stage)}"
+    return f"{key_scouse_unit(scouse_unit_id)}-{tag}"
+
+
 # ---------------------------------------------------------------------------
 # Guarded session creation
 # ---------------------------------------------------------------------------
