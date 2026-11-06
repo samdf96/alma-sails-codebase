@@ -61,6 +61,7 @@ import re
 import shutil
 
 from alma_ops.imaging.casa_scratch import scratch_cwd
+from alma_ops.imaging.cont_dat_utils import chanfreqs_in_frame
 from alma_ops.imaging.continuum_config import DEFAULT_ROBUST, select_automask
 from alma_ops.imaging.line_imaging_config import (
     LINE_IMAGING_PAD_MAX_CHANNELS,
@@ -69,7 +70,7 @@ from alma_ops.imaging.line_imaging_config import (
     LINE_IMAGING_PAD_FRACTION,
     TCLEAN_LINE_IMAGING_SHARED,
 )
-from alma_ops.imaging.species_shorthand import shorthand_for
+from alma_ops.imaging.species_shorthand import isotopologue_for
 
 C_KMS = 299_792.458  # speed of light, km/s
 
@@ -142,8 +143,14 @@ def compute_line_window(
     pad_fraction: float = LINE_IMAGING_PAD_FRACTION,
     pad_floor_kms: float = LINE_IMAGING_PAD_FLOOR_KMS,
     pad_max_channels: int = LINE_IMAGING_PAD_MAX_CHANNELS,
+    override=None,
+    field=None,
 ) -> dict:
     """Compute the deep-imaging frequency window for one confirmed detection.
+
+    With an ``override`` (a line_imaging_window_override row), the window is the
+    human-set velocity range instead: ADMIT's velocity_kms and channel range are
+    not used, so a merged segment or a one-wing feature cannot mis-centre it.
 
     Re-queries native_chanwidth_hz/center_freq_hz live via casatools.msmetadata
     on the actual MS being imaged (matching line_triage_utils.compute_bin_factor's
@@ -169,12 +176,21 @@ def compute_line_window(
         gets usable baseline, and capped at pad_max_channels native channels so a
         broad one does not run away -- padding proportional to a very wide line
         buys nothing and pushes the window past the SPW edge.
+    override:
+        Optional row/dict with v_lo_kms, v_hi_kms: LSRK radio velocities relative
+        to detection["frequency_ghz"]. The pad is then pad_floor_kms per side,
+        with no pad_fraction and no channel cap -- the range already says how
+        wide the line is, and the cap is what made det 193 unfixable.
+    field:
+        Target field name, used for the direction of the TOPO->LSRK conversion
+        of the SPW extent (optional; see cont_dat_utils.chanfreqs_in_frame).
 
     Returns
     -------
     dict
         {"freq_peak_ghz", "linewidth_kms", "lo_ghz", "hi_ghz",
-         "native_chanwidth_hz", "center_freq_hz"}.
+         "native_chanwidth_hz", "center_freq_hz", "pad_kms", "clipped_to_spw",
+         "window_source"} -- window_source is "override" or "admit".
     """
     try:
         import casatools
@@ -187,33 +203,46 @@ def compute_line_window(
     try:
         native_chanwidth_hz = float(abs(np.asarray(msmd.chanwidths(spw_idx))[0]))
         center_freq_hz = float(msmd.meanfreq(spw_idx))
-        _chan_freqs = np.asarray(msmd.chanfreqs(spw_idx), dtype=float)
-        spw_lo_ghz = float(_chan_freqs.min()) / 1e9
-        spw_hi_ghz = float(_chan_freqs.max()) / 1e9
     finally:
         msmd.done()
+    # The window below is LSRK, so the SPW extent it is clipped to must be LSRK
+    # too: msmetadata.chanfreqs() is TOPO, tens of MHz away (det 4854's window
+    # was clipped against TOPO edges into an empty, inverted range).
+    _chan_freqs = np.asarray(chanfreqs_in_frame(ms_path, spw_idx, "LSRK", field=field), dtype=float)
+    spw_lo_ghz = float(_chan_freqs.min()) / 1e9
+    spw_hi_ghz = float(_chan_freqs.max()) / 1e9
 
     frequency_ghz = detection["frequency_ghz"]
-    velocity_kms = detection["velocity_kms"]
-    # Two frame transforms to undo, not one -- see module docstring. ADMIT's
-    # own specutil.getspectrum() undopplers every frequency into a source
-    # rest frame *before* line searching, so LineID_AT.py's velocity formula
-    # operates on that shifted quantity (freq_rf), not the raw sky frequency.
-    freq_rf = frequency_ghz / (1 - (velocity_kms - vlsr_kms) / C_KMS)   # undo LineID_AT's velocity formula
-    freq_peak_ghz = freq_rf * (1 - vlsr_kms / C_KMS)                    # undo ADMIT's own undoppler()
 
-    n_chan_detection = detection["endchan"] - detection["startchan"] + 1
-    linewidth_kms = n_chan_detection * bin_factor * native_chanwidth_hz / center_freq_hz * C_KMS
+    if override is not None:
+        v_lo, v_hi = override["v_lo_kms"], override["v_hi_kms"]
+        linewidth_kms = v_hi - v_lo
+        pad_kms = pad_floor_kms
+        freq_peak_ghz = frequency_ghz * (1 - (v_lo + v_hi) / 2 / C_KMS)
+        # Radio convention: the high-velocity edge is the low-frequency one.
+        lo_ghz = frequency_ghz * (1 - (v_hi + pad_kms) / C_KMS)
+        hi_ghz = frequency_ghz * (1 - (v_lo - pad_kms) / C_KMS)
+    else:
+        velocity_kms = detection["velocity_kms"]
+        # Two frame transforms to undo, not one -- see module docstring. ADMIT's
+        # own specutil.getspectrum() undopplers every frequency into a source
+        # rest frame *before* line searching, so LineID_AT.py's velocity formula
+        # operates on that shifted quantity (freq_rf), not the raw sky frequency.
+        freq_rf = frequency_ghz / (1 - (velocity_kms - vlsr_kms) / C_KMS)   # undo LineID_AT's velocity formula
+        freq_peak_ghz = freq_rf * (1 - vlsr_kms / C_KMS)                    # undo ADMIT's own undoppler()
 
-    chan_kms = native_chanwidth_hz / center_freq_hz * C_KMS
-    pad_kms = max(pad_fraction * linewidth_kms, pad_floor_kms)
-    # Ceiling in channels: a broad line needs enough baseline to sit against,
-    # not padding proportional to its own width.
-    pad_kms = min(pad_kms, pad_max_channels * chan_kms)
+        n_chan_detection = detection["endchan"] - detection["startchan"] + 1
+        linewidth_kms = n_chan_detection * bin_factor * native_chanwidth_hz / center_freq_hz * C_KMS
 
-    half_window_kms = linewidth_kms / 2 + pad_kms
-    lo_ghz = freq_peak_ghz * (1 - half_window_kms / C_KMS)
-    hi_ghz = freq_peak_ghz * (1 + half_window_kms / C_KMS)
+        chan_kms = native_chanwidth_hz / center_freq_hz * C_KMS
+        pad_kms = max(pad_fraction * linewidth_kms, pad_floor_kms)
+        # Ceiling in channels: a broad line needs enough baseline to sit against,
+        # not padding proportional to its own width.
+        pad_kms = min(pad_kms, pad_max_channels * chan_kms)
+
+        half_window_kms = linewidth_kms / 2 + pad_kms
+        lo_ghz = freq_peak_ghz * (1 - half_window_kms / C_KMS)
+        hi_ghz = freq_peak_ghz * (1 + half_window_kms / C_KMS)
 
     # Clip to the SPW's own extent. Channels beyond it can never be filled --
     # tclean blanks them, inflating the cube for no signal (det 461 came back
@@ -236,6 +265,7 @@ def compute_line_window(
         "center_freq_hz": center_freq_hz,
         "pad_kms": pad_kms,
         "clipped_to_spw": bool(clipped_lo or clipped_hi),
+        "window_source": "override" if override is not None else "admit",
     }
 
 
@@ -272,7 +302,7 @@ def _blank_channel_fraction(image_path: str) -> float | None:
 def build_img_base(
     imaging_dir, target_name: str, mous_dir_id: str, spw_idx: int,
     species_name: str | None, frequency_ghz: float, detection_id: int,
-    robust: float = DEFAULT_ROBUST,
+    robust: float = DEFAULT_ROBUST, formula: str | None = None,
 ) -> str:
     """Build the shared image basename, used by both run_line_imaging (to
     write to) and reset_line_imaging.py (to know what to delete without
@@ -285,14 +315,22 @@ def build_img_base(
     imaged at several weightings side by side. Without it an r=2.0 run would
     silently overwrite the r=0.5 products. Note this renames products relative
     to earlier runs, which recorded no suffix at all -- any imaging_products
-    paths written before this change point at filenames that no longer exist. Folds in the curated
-    shorthand (species_shorthand.shorthand_for) alongside the full species
-    slug when one exists, since the full descriptive name alone (e.g.
-    "Cyclopropenylidene") is slower to scan on disk than its formula."""
+    paths written before this change point at filenames that no longer exist.
+
+    Folds in the detection's specific formula (species_shorthand.isotopologue_for,
+    from ADMIT's per-detection formula) after the full species slug, since
+    species_name is shared by a whole isotopologue family: without it 13CS was
+    filed as "CS" and H13CO+ as "HCO". "+" becomes "p" (H13COp, N2Hp) so a
+    cation is not confused with its neutral, and an excited vibrational state is
+    kept as "_v7_1" (HC3Nv7=1). Pass formula -- without it this falls back to
+    the family-level shorthand."""
     species_slug = re.sub(r"[^A-Za-z0-9]+", "_", (species_name or "Unknown")).strip("_")
-    shorthand = shorthand_for(species_name)
-    if shorthand:
-        species_slug += "_" + re.sub(r"[^A-Za-z0-9]+", "_", shorthand).strip("_")
+    label = isotopologue_for(species_name, formula, frequency_ghz)
+    if label:
+        label = re.sub(r"(v\d*|vt)=(\d+)$", r"_\1_\2", label.replace("+", "p"))
+        label = re.sub(r"[^A-Za-z0-9]+", "_", label).strip("_")
+        if label != species_slug:
+            species_slug += "_" + label
     # 0.5 -> "_r05", 2.0 -> "_r20", -1.0 -> "_rm10". Two digits keeps the
     # common values aligned on disk; the m prefix avoids a bare "-" in a filename.
     tenths = int(round(robust * 10))
@@ -321,6 +359,7 @@ def run_line_imaging(
     is_mosaic: bool = False,
     keep_casa_products: bool = False,
     parallel: bool = False,
+    formula: str | None = None,
 ) -> dict:
     """Run tclean + impbcor + exportfits for one confirmed line detection.
 
@@ -339,6 +378,9 @@ def run_line_imaging(
         line_admit_detection_id, used in the output filename for uniqueness.
     species_name:
         Detection's species_name (None/"Unknown" for unidentified lines).
+    formula:
+        Detection's ADMIT formula (e.g. "13CS", "HC3Nv7=1"); names the specific
+        isotopologue in the output filename (see build_img_base).
     frequency_ghz:
         Detection's matched/peak rest frequency -- used as tclean's restfreq
         (the image's velocity-axis zero point).
@@ -379,7 +421,7 @@ def run_line_imaging(
 
     img_base = build_img_base(
         imaging_dir, target_name, mous_dir_id, spw_idx, species_name, frequency_ghz,
-        detection_id, robust,
+        detection_id, robust, formula=formula,
     )
 
     _log_path = img_base + ".casa.log"

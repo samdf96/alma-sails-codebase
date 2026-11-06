@@ -46,11 +46,31 @@ Usage:
     python3 review_line_detections.py --purge-triage-cube --include-confirmed --mous-id uid://... --source EC_53 --spw 3
         # same, but also purges SPWs where some detections were confirmed. Use when
         # you want to clear a fully-reviewed SPW regardless of outcome.
+
+Deep-imaging window overrides (line_imaging_window_override). ADMIT's velocity can sit on a
+neighbouring line (merged segment) or on one wing, which mis-centres the
+deep-imaging window. An override replaces ADMIT's velocity and channel range
+with a velocity range you choose; line_admit_detection itself is never changed.
+Velocities are LSRK radio, relative to the detection's own rest frequency.
+
+    python3 review_line_detections.py --set-window 537 --vmin -10 --vmax 30 \
+        --note "ADMIT velocity on c-C3H2 218.733; H2CO at vlsr"
+    python3 review_line_detections.py --set-window 537 --vmin -10 --vmax 30 --dry-run
+    python3 review_line_detections.py --windows-file overrides.csv [--dry-run]
+        # CSV with header det,v_lo_kms,v_hi_kms[,origin][,note]; all rows are
+        # validated before any is written.
+    python3 review_line_detections.py --clear-window 537 [538 ...]
+    python3 review_line_detections.py --list-windows
+        # An override applies to the next deep-imaging run only. A detection that
+        # is already imaged needs manual_line_imaging.py / batch_line_imaging.py
+        # --force to pick it up.
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
+import json
 import sys
 from pathlib import Path
 
@@ -61,6 +81,7 @@ from alma_ops.config import DB_PATH
 from alma_ops.imaging.species_shorthand import shorthand_for
 
 SEP = "-" * 165
+C_KMS = 299_792.458
 
 
 def _print_detections(rows) -> None:
@@ -252,6 +273,97 @@ def _apply_review(conn, values, review_status: str, note: str | None) -> None:
     print(summary)
 
 
+def _window_context(conn, det_row) -> str:
+    """One line on where the current deep-imaging window sits, for comparison.
+
+    ADMIT's velocity_kms is mirrored about vlsr (compute_line_window), so the
+    centre it implies is 2*vlsr - velocity_kms, not velocity_kms itself.
+    """
+    unit = _rows_with_unit_info(conn, [det_row])[0]
+    f0 = det_row["frequency_ghz"]
+    parts = [f"{unit['target_name']} spw{unit['spw_idx']}"]
+    target = next((t for t in db.get_mous_targets(conn, unit["mous_id"])
+                   if t["alma_source_name"] == unit["target_name"]), None)
+    if target is not None and target["vlsr_kms"] is not None and det_row["velocity_kms"] is not None:
+        parts.append(f"ADMIT centre {2 * target['vlsr_kms'] - det_row['velocity_kms']:+.1f} km/s")
+    lips = db.get_line_imaging_unit_for_detection(conn, det_row["line_admit_detection_id"])
+    if lips is not None and lips["imaging_products"]:
+        last = json.loads(lips["imaging_products"])[-1]
+        v_lo = C_KMS * (1 - last["hi_ghz"] / f0)
+        v_hi = C_KMS * (1 - last["lo_ghz"] / f0)
+        parts.append(f"last cube v=[{v_lo:+.1f}, {v_hi:+.1f}] ({lips['current_state']}; re-image needs --force)")
+    elif lips is not None:
+        parts.append(f"imaging unit {lips['current_state']}")
+    else:
+        parts.append("not imaged yet")
+    return ", ".join(parts)
+
+
+def _apply_windows(conn, entries, dry_run: bool) -> None:
+    """Validate every (det, v_lo, v_hi, origin, note) entry, then write them all.
+
+    Same all-or-nothing rule as _apply_review: one bad row fails the batch.
+    """
+    rows, errors = {}, []
+    for det_id, v_lo, v_hi, _origin, _note in entries:
+        row = db.get_line_admit_detection(conn, det_id)
+        if row is None:
+            errors.append(f"no detection with id {det_id}")
+        elif not v_lo < v_hi:
+            errors.append(f"det {det_id}: vmin {v_lo} is not below vmax {v_hi}")
+        else:
+            rows[det_id] = row
+    if errors:
+        for e in errors:
+            print(f"[ERROR] {e}")
+        print("        Nothing was written -- fix and re-run.")
+        sys.exit(1)
+
+    tag = "[DRY RUN] " if dry_run else ""
+    for det_id, v_lo, v_hi, origin, note in entries:
+        row = rows[det_id]
+        shorthand = shorthand_for(row["species_name"], row["frequency_ghz"]) or row["formula"] or "?"
+        old = db.get_line_imaging_window_override(conn, det_id)
+        was = f" (was [{old['v_lo_kms']:g}, {old['v_hi_kms']:g}])" if old is not None else ""
+        if row["review_status"] != "confirmed":
+            print(f"  [WARN] {det_id} is '{row['review_status']}'; the override is stored but "
+                  f"deep imaging only runs on confirmed detections")
+        print(f"  {tag}{det_id:>6}  {shorthand:<16} v=[{v_lo:g}, {v_hi:g}] km/s{was}  [{origin}]")
+        print(f"          {_window_context(conn, row)}")
+        if not dry_run:
+            db.set_line_imaging_window_override(conn, det_id, v_lo, v_hi, note=note, origin=origin)
+    print(f"{tag}[OK] {len(entries)} window override(s) {'would be ' if dry_run else ''}set")
+
+
+def _read_windows_file(path: str) -> list[tuple]:
+    entries = []
+    with open(path, newline="") as fh:
+        for i, rec in enumerate(csv.DictReader(fh), start=2):
+            try:
+                entries.append((int(rec["det"]), float(rec["v_lo_kms"]), float(rec["v_hi_kms"]),
+                                (rec.get("origin") or "").strip() or "manual",
+                                (rec.get("note") or "").strip() or None))
+            except (KeyError, TypeError, ValueError) as exc:
+                print(f"[ERROR] {path} line {i}: {exc!r}; need columns det,v_lo_kms,v_hi_kms")
+                sys.exit(1)
+    return entries
+
+
+def _list_windows(conn) -> None:
+    overrides = db.get_line_imaging_window_overrides(conn)
+    print(f"Window overrides (n={len(overrides)}):")
+    if not overrides:
+        print("  (none)")
+        return
+    for o in overrides:
+        row = db.get_line_admit_detection(conn, o["line_admit_detection_id"])
+        shorthand = shorthand_for(row["species_name"], row["frequency_ghz"]) or row["formula"] or "?"
+        print(f"  {o['line_admit_detection_id']:>6}  {shorthand:<16} "
+              f"v=[{o['v_lo_kms']:g}, {o['v_hi_kms']:g}] km/s  [{o['origin']}, {o['created_at'][:10]}]  "
+              f"{o['note'] or ''}")
+        print(f"          {_window_context(conn, row)}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="List and review ADMIT line detections.")
     parser.add_argument("--mous-id", default=None)
@@ -270,11 +382,24 @@ def main() -> None:
     parser.add_argument("--reject", nargs="+", default=None, metavar="DETECTION_ID",
                          help="One or more detection ids, space- and/or comma-separated")
     parser.add_argument("--note", default=None,
-                         help="Optional note for --confirm/--reject; applied to every id given")
+                         help="Optional note for --confirm/--reject/--set-window; applied to every id given")
     parser.add_argument("--reject-below", type=float, default=None, metavar="SIGMA",
                          help="Bulk-reject all pending detections with peakrms_sigma below SIGMA")
     parser.add_argument("--dry-run", action="store_true",
-                         help="With --reject-below: show what would be rejected without writing")
+                         help="With --reject-below/--set-window/--windows-file: show what would "
+                              "be written without writing")
+    parser.add_argument("--set-window", type=int, default=None, metavar="DETECTION_ID",
+                         help="Set a deep-imaging velocity window override (needs --vmin/--vmax)")
+    parser.add_argument("--vmin", type=float, default=None, metavar="KMS",
+                         help="With --set-window: low edge, LSRK radio km/s about the line's rest frequency")
+    parser.add_argument("--vmax", type=float, default=None, metavar="KMS",
+                         help="With --set-window: high edge, LSRK radio km/s")
+    parser.add_argument("--windows-file", default=None, metavar="CSV",
+                         help="Set window overrides from a CSV: det,v_lo_kms,v_hi_kms[,origin][,note]")
+    parser.add_argument("--clear-window", nargs="+", default=None, metavar="DETECTION_ID",
+                         help="Remove window overrides, space- and/or comma-separated")
+    parser.add_argument("--list-windows", action="store_true",
+                         help="List all deep-imaging window overrides")
     parser.add_argument("--purge-triage-cube", action="store_true",
                          help="Delete the triage cube for --mous-id/--source/--spw if every detection is rejected")
     parser.add_argument("--include-confirmed", action="store_true",
@@ -297,6 +422,34 @@ def main() -> None:
     args = parser.parse_args()
 
     conn = db.get_connection(args.db_path)
+
+    if args.set_window is not None:
+        if args.vmin is None or args.vmax is None:
+            print("[ERROR] --set-window needs --vmin and --vmax")
+            conn.close()
+            sys.exit(1)
+        _apply_windows(conn, [(args.set_window, args.vmin, args.vmax, "manual", args.note)], args.dry_run)
+        conn.close()
+        return
+
+    if args.windows_file is not None:
+        _apply_windows(conn, _read_windows_file(args.windows_file), args.dry_run)
+        conn.close()
+        return
+
+    if args.clear_window is not None:
+        for det_id in _parse_detection_ids(args.clear_window):
+            if db.clear_line_imaging_window_override(conn, det_id):
+                print(f"  [OK]   {det_id:>6}  override removed")
+            else:
+                print(f"  [SKIP] {det_id:>6}  had no override")
+        conn.close()
+        return
+
+    if args.list_windows:
+        _list_windows(conn)
+        conn.close()
+        return
 
     if args.confirm is not None:
         _apply_review(conn, args.confirm, "confirmed", args.note)

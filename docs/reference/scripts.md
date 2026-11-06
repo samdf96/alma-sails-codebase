@@ -6,6 +6,30 @@ Scripts marked **CASA** must be run with `casa --nologger --nologfile -c script.
 
 ---
 
+## Database scripts
+
+### `init_database.py` — Python
+
+Create a new database from `schema/schema.sql` (the complete schema), or check an existing one against it. Creating refuses a file that already holds tables. `--check` compares tables, columns (order, type, NOT NULL, default, key), foreign keys, unique constraints and indexes, prints every difference and exits 1 on any.
+
+```bash
+python alma-sails-codebase/scripts/init_database.py --db-path db/serpens_v2.db   # new database
+python alma-sails-codebase/scripts/init_database.py --check                       # live database
+```
+
+A schema change means editing `schema/schema.sql` and applying the same change to the live database by hand (`ALTER TABLE` / `CREATE TABLE`), then running `--check`.
+
+### `seed_database.py` — Python
+
+Populate a new database from an ALMiner CSV export: the reference tables (`alminer_metadata`, `projects`, `mous`, `targets`) and the initial `pending` rows of the MOUS and continuum-imaging state machines. `--vlsr-kms` (required) is written to every target; ADMIT and deep line imaging need it.
+
+```bash
+python alma-sails-codebase/scripts/seed_database.py db/seed_inputs/serpens_main_metadata.csv \
+    --db-path db/serpens_v2.db --vlsr-kms 8.5
+```
+
+---
+
 ## MOUS pipeline scripts
 
 ### `manual_download.py` — Python
@@ -194,8 +218,13 @@ Deep-clean a confirmed line detection.
 casa [--nologger] [--nologfile] \
     -c alma-sails-codebase/scripts/manual_line_imaging.py \
     --detection-id <detection-id> \
-    [--robust 0.5] [--ncores 1] [--force] [--dry-run] [--keep-casa-products]
+    [--robust 0.5] [--ncores 1] [--pad-fraction 1.0] [--pad-floor-kms 10] \
+    [--force] [--dry-run] [--keep-casa-products]
 ```
+
+Uses the detection's window override instead of the ADMIT-derived window when one is set (see `review_line_detections.py --set-window`); the dry run prints which.
+
+Products are named `<target>_<mous>_spw<n>_<Species_Name>_<formula>_<freq>GHz_det<id>_r<NN>`, where `<formula>` is the detection's own ADMIT formula (the specific isotopologue and any excited vibrational state, e.g. `13CS`, `H13COp`, `HC3N_v7_1`; `+` is written `p`).
 
 Advances: line imaging `ready → complete`
 
@@ -210,10 +239,6 @@ python alma-sails-codebase/scripts/reset_line_imaging.py --detection-id <detecti
 ```
 
 ---
-
-## Audit and review scripts
-
-These live in `scripts/` alongside the processing scripts and run from the project root with standard Python (no CASA required).
 
 ### `review_line_detections.py` — Python
 
@@ -235,6 +260,13 @@ python alma-sails-codebase/scripts/review_line_detections.py --reject <detection
 # Bulk-reject everything below a threshold (--dry-run to preview)
 python alma-sails-codebase/scripts/review_line_detections.py \
     --reject-below 3.0 --dry-run
+
+# Deep-imaging window overrides (LSRK radio km/s about the line's rest frequency)
+python alma-sails-codebase/scripts/review_line_detections.py --set-window <detection-id> \
+    --vmin -10 --vmax 30 --note "..." [--dry-run]
+python alma-sails-codebase/scripts/review_line_detections.py --windows-file overrides.csv [--dry-run]
+python alma-sails-codebase/scripts/review_line_detections.py --list-windows
+python alma-sails-codebase/scripts/review_line_detections.py --clear-window <detection-id>
 ```
 
 ---

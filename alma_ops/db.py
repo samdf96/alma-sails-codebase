@@ -1193,6 +1193,75 @@ def get_line_imaging_unit_for_detection(conn: sqlite3.Connection, line_admit_det
     )
 
 
+# Optional human-set velocity range per detection, used by compute_line_window in
+# place of ADMIT's velocity_kms/startchan/endchan. Kept apart from
+# line_admit_detection so ADMIT's own output is never rewritten.
+
+def get_line_imaging_window_override(
+    conn: sqlite3.Connection, line_admit_detection_id: int,
+) -> sqlite3.Row | None:
+    """Fetch the window override for one detection, or None if there is none."""
+    return fetch_one(
+        conn,
+        "SELECT * FROM line_imaging_window_override WHERE line_admit_detection_id=?",
+        (line_admit_detection_id,),
+    )
+
+
+def get_line_imaging_window_overrides(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """All window overrides, by detection id."""
+    return fetch_all(
+        conn,
+        "SELECT * FROM line_imaging_window_override ORDER BY line_admit_detection_id",
+    )
+
+
+def set_line_imaging_window_override(
+    conn: sqlite3.Connection,
+    line_admit_detection_id: int,
+    v_lo_kms: float,
+    v_hi_kms: float,
+    note: str | None = None,
+    origin: str = "manual",
+) -> None:
+    """Insert or replace the window override for one detection.
+
+    Parameters
+    ----------
+    line_admit_detection_id:
+        Detection the override applies to.
+    v_lo_kms, v_hi_kms:
+        LSRK radio velocity range to image, relative to the detection's own
+        frequency_ghz (the rest frequency of the line ADMIT labelled).
+    note:
+        Why the ADMIT-derived window was wrong.
+    origin:
+        'manual', or where a seeded value came from.
+    """
+    if not v_lo_kms < v_hi_kms:
+        raise ValueError(f"v_lo_kms ({v_lo_kms}) must be below v_hi_kms ({v_hi_kms})")
+    now = datetime.now(timezone.utc).isoformat()
+    with transaction(conn):
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO line_imaging_window_override
+                (line_admit_detection_id, v_lo_kms, v_hi_kms, origin, note, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (line_admit_detection_id, v_lo_kms, v_hi_kms, origin, note, now),
+        )
+
+
+def clear_line_imaging_window_override(conn: sqlite3.Connection, line_admit_detection_id: int) -> bool:
+    """Delete the window override for one detection; True if one existed."""
+    with transaction(conn):
+        cur = conn.execute(
+            "DELETE FROM line_imaging_window_override WHERE line_admit_detection_id=?",
+            (line_admit_detection_id,),
+        )
+    return cur.rowcount > 0
+
+
 def record_line_imaging_transition(
     conn: sqlite3.Connection,
     line_imaging_unit_id: int,

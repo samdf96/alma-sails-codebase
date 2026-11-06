@@ -23,7 +23,11 @@ from __future__ import annotations
 # Padding applied on each side of a confirmed detection's empirical linewidth
 # when building the deep-imaging frequency window (see line_imaging_utils).
 LINE_IMAGING_PAD_FRACTION: float = 1.0   # per side, as a multiple of measured linewidth
-LINE_IMAGING_PAD_FLOOR_KMS: float = 5.0  # minimum per-side padding regardless of measured width
+# Minimum per-side padding regardless of measured width. Raised from 5.0 after
+# 2026-10-29 final cubes (dets 2016, 2135, 3962) came back with emission at the
+# cube edge: ADMIT's channel range often covers one velocity or hyperfine
+# component of a multi-component line.
+LINE_IMAGING_PAD_FLOOR_KMS: float = 10.0
 
 # Ceiling on per-side padding, in NATIVE channels. Padding is a fraction of the
 # measured linewidth, which is right for narrow lines and wrong for broad ones:

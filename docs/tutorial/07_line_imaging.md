@@ -9,9 +9,22 @@
 
 Deep line imaging produces a fully-cleaned spectral cube of a specific confirmed line transition. Unlike the dirty triage cubes used for line identification, this step runs `tclean` with `niter > 0` and auto-multithresh masking to deconvolve the emission properly.
 
-The frequency window for the cube is derived automatically from the confirmed detection: the pipeline inverts the ADMIT frequency transforms to find the correct sky-frequency range, then pads by a multiple of the detection's empirical linewidth.
+The frequency window for the cube is derived automatically from the confirmed detection: the pipeline inverts the ADMIT frequency transforms to find the correct sky-frequency range, then pads by a multiple of the detection's empirical linewidth (at least 10 km/s per side, `--pad-floor-kms`).
 
 Each confirmed detection gets exactly one `line_imaging_unit`. If you want to re-image with different parameters (robust, padding), use `--force` to re-run.
+
+### When ADMIT's window is wrong: window overrides
+
+ADMIT's velocity is not always on the line it names. When one ADMIT segment holds two lines, the ID is right but the velocity points at the neighbour; for a broad outflow line it can sit on one wing. The automatic window is then off-centre or truncated. Set the velocity range yourself:
+
+```bash
+python alma-sails-codebase/scripts/review_line_detections.py --set-window 537 \
+    --vmin -10 --vmax 30 --note "ADMIT velocity on c-C3H2 218.733; H2CO at vlsr" [--dry-run]
+python alma-sails-codebase/scripts/review_line_detections.py --list-windows
+python alma-sails-codebase/scripts/review_line_detections.py --clear-window 537
+```
+
+Velocities are LSRK radio km/s relative to the detection's own rest frequency. The window becomes that range plus `--pad-floor-kms` per side, clipped to the SPW; ADMIT's velocity, channel range and the 128-channel pad cap are not used. Overrides live in their own table (`line_imaging_window_override`), so `line_admit_detection` keeps ADMIT's output unchanged. An override only affects the next run: a detection that is already imaged needs `--force`. Each run records `window_source` (`admit` or `override`) and the range used in `imaging_products`.
 
 ---
 

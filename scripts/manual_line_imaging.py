@@ -11,7 +11,7 @@ Run from a CANFAR c-casa container:
         [--robust 0.5] \\
         [--ncores 4] \\
         [--pad-fraction 1.0] \\
-        [--pad-floor-kms 5.0] \\
+        [--pad-floor-kms 10.0] \\
         [--force] \\
         [--dry-run] \\
         [--keep-casa-products] \\
@@ -23,7 +23,9 @@ launching deep imaging for it are two separate, explicit actions; nothing
 auto-launches this stage off a confirm. Resolves the parent triage/MOUS
 chain (alma_ops.imaging.line_imaging_utils.resolve_line_imaging_inputs),
 computes a frequency window centered on the confirmed line
-(compute_line_window), runs tclean -> impbcor -> exportfits
+(compute_line_window, or the detection's line_imaging_window_override when
+one is set -- see review_line_detections.py --set-window), runs tclean ->
+impbcor -> exportfits
 (run_line_imaging), and advances the line_imaging_unit to 'complete'.
 Output: imaging/lines/final/<target>/ (config.LINE_FINAL_DIR).
 Note: unlike the triage stage, there is no B<band>_<config> level here.
@@ -106,13 +108,22 @@ def main() -> None:
 
     pad_fraction  = args.pad_fraction  if args.pad_fraction  is not None else LINE_IMAGING_PAD_FRACTION
     pad_floor_kms = args.pad_floor_kms if args.pad_floor_kms is not None else LINE_IMAGING_PAD_FLOOR_KMS
+    override = db.get_line_imaging_window_override(conn, args.detection_id)
     window = compute_line_window(
         inputs["ms_paths"][0], inputs["spw_idx"], detection, inputs["vlsr_kms"], inputs["bin_factor"],
-        pad_fraction=pad_fraction, pad_floor_kms=pad_floor_kms,
+        pad_fraction=pad_fraction, pad_floor_kms=pad_floor_kms, override=override,
+        field=inputs["target_name"],
     )
+    if override is not None:
+        print(f"  window source : OVERRIDE v=[{override['v_lo_kms']:.1f}, {override['v_hi_kms']:.1f}] km/s "
+              f"({override['origin']}; {override['note'] or 'no note'})")
+    else:
+        print(f"  window source : ADMIT (velocity_kms={detection['velocity_kms']:.2f}, "
+              f"chans {detection['startchan']}-{detection['endchan']})")
     print(f"  freq_peak_ghz : {window['freq_peak_ghz']:.6f}")
     print(f"  linewidth_kms : {window['linewidth_kms']:.3f}")
-    print(f"  pad_fraction  : {pad_fraction}  pad_floor_kms: {pad_floor_kms}")
+    print(f"  pad_kms       : {window['pad_kms']:.2f}  (pad_fraction: {pad_fraction}  pad_floor_kms: {pad_floor_kms}"
+          f"{'; override uses the floor only' if override is not None else ''})")
     print(f"  window        : [{window['lo_ghz']:.6f}, {window['hi_ghz']:.6f}] GHz")
 
     imaging_dir = LINE_FINAL_DIR / inputs["target_name"]
@@ -163,6 +174,7 @@ def main() -> None:
             is_mosaic=inputs["is_mosaic"],
             keep_casa_products=args.keep_casa_products,
             parallel=args.ncores > 1,
+            formula=detection["formula"],
         )
     except Exception:
         err = traceback.format_exc()
@@ -178,6 +190,11 @@ def main() -> None:
     imaging_products = {
         **result, "robust": args.robust,
         "pad_fraction": pad_fraction, "pad_floor_kms": pad_floor_kms,
+        "window_source": window["window_source"],
+        "window_override": (
+            {k: override[k] for k in ("v_lo_kms", "v_hi_kms", "origin", "note", "created_at")}
+            if override is not None else None
+        ),
         "completed_at": datetime.now(timezone.utc).isoformat(),
         "code_commit": code_version(),
     }

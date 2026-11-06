@@ -80,6 +80,7 @@ def main(detection_id: int, db_path: Path, robust: float = DEFAULT_ROBUST) -> No
     img_base = Path(build_img_base(
         imaging_dir, target_name, mous_dir_id, unit_row["spw_idx"],
         unit_row["species_name"], unit_row["frequency_ghz"], detection_id, robust,
+        formula=detection["formula"],
     ))
 
     print(f"[reset-line-imaging] detection_id : {detection_id}")

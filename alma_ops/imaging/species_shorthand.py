@@ -28,6 +28,8 @@ HC3N Band 6 transitions, HCO+ isotopologues). No runtime dependency on PHANGS.
 
 from __future__ import annotations
 
+import re
+
 # Species-level shorthands: used when no frequency is supplied, or as
 # fallback when a detection frequency matches no entry in _TRANSITION_RANGES.
 # ADMIT uses the same species_name for all isotopologues of a molecule, so the
@@ -166,6 +168,34 @@ def shorthand_for(species_name: str | None, frequency_ghz: float | None = None) 
             if name == species_name and lo <= frequency_ghz <= hi:
                 return label
     return SPECIES_SHORTHAND.get(species_name)
+
+
+# Splatalogue spellings of a main isotopologue that differ from the shorthand
+# used everywhere else in the survey.
+_FORMULA_ALIASES: dict[str, str] = {
+    "c-HCCCH": "c-C3H2",
+}
+
+
+def isotopologue_for(
+    species_name: str | None,
+    formula: str | None,
+    frequency_ghz: float | None = None,
+) -> str | None:
+    """Isotopologue- and vibrational-state-specific formula for one detection,
+    e.g. "13CS", "H13CO+", "HC3Nv7=1".
+
+    ADMIT's per-detection formula already names the exact isotopologue, which
+    species_name (shared by the whole family) and _TRANSITION_RANGES (curated,
+    with gaps) cannot guarantee. Only the ground-state tag ("v=0", "vt=0") is
+    dropped; excited states are kept because they are different lines. Falls
+    back to shorthand_for() for unidentified lines (formula "U_<freq>") or a
+    missing formula."""
+    f = (formula or "").strip()
+    if not f or f.startswith("U_"):
+        return shorthand_for(species_name, frequency_ghz)
+    f = re.sub(r"(v\d*|vt)=0$", "", f)
+    return _FORMULA_ALIASES.get(f, f)
 
 
 # ---------------------------------------------------------------------------
