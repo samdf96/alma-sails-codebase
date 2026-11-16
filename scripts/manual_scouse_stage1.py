@@ -17,6 +17,10 @@ from stage1_complete and runs stages 2-4 and ACORNS as headless sessions.
 Prerequisites: the unit must already be in state 'prep_complete' (run
 manual_scouse_prep.py first).
 
+If the coverage saves no SAAs (totalsaas = 0, e.g. a faint or point-like line), the
+unit goes to the final state 'no_saas' instead of stage1_complete: scousepy's stage 2
+crashes on an empty SAA list, and there is nothing to fit.
+
 GUI workflow:
   1. Integrated intensity map appears.
   2. Click "run moments" (green, left panel).
@@ -49,10 +53,13 @@ import shutil
 
 from alma_ops import db
 from alma_ops.imaging.scouse_utils import (
+    SCOUSE_NO_SAAS,
     add_stage_args,
     advance_scouse_state,
     cube_stem,
     load_stage_unit,
+    n_saas,
+    no_saas_note,
     read_coverage_config,
     scouse_connection,
     scousepy_config_path,
@@ -146,13 +153,29 @@ def run(args, state_row) -> None:
         params["_mask_sigma"] = round(params["mask_below"] / params["_rms_jybeam"], 2)
     print("  settings used: " + "  ".join(f"{k}={v}" for k, v in gui.items()), flush=True)
 
+    notes = []
+    if changed:
+        notes.append("GUI changed " + ", ".join(f"{k}={v}" for k, v in changed.items()))
+    # scousepy's stage 2 crashes on an empty SAA list (saa_list[:,0] on a 1-D array), so a
+    # unit with no SAAs ends here instead of being handed to batch_scouse.py.
+    to_state = "stage1_complete"
+    if n_saas(params) == 0:
+        to_state = SCOUSE_NO_SAAS
+        notes.append(no_saas_note(params))
+
     with scouse_connection(args.db_path) as conn:
         update_scouse_parameters(conn, unit_id, params)
         advance_scouse_state(
             conn, unit_id, source, label,
-            from_state="prep_complete", to_state="stage1_complete",
-            note=("GUI changed " + ", ".join(f"{k}={v}" for k, v in changed.items())) if changed else None,
+            from_state="prep_complete", to_state=to_state,
+            note="; ".join(notes) or None,
         )
+    if to_state == SCOUSE_NO_SAAS:
+        print(f"[NO SAAS] {source} / {label} → {SCOUSE_NO_SAAS}: {no_saas_note(params)}")
+        print("          Nothing for stages 2-4 to fit; batch_scouse.py will leave this unit alone.")
+        print("          To try other settings: manual_scouse_prep.py --detection-id N --force "
+              "(e.g. --mask-sigma 3), then stage 1 again.")
+        return
     print(f"[OK] {source} / {label} → stage1_complete")
 
 

@@ -1021,10 +1021,10 @@ def get_line_admit_detections_blocking_rerun(
 ) -> list[sqlite3.Row]:
     """Detections an ADMIT re-run on this unit must not silently replace.
 
-    Those carrying a human review (confirmed, or rejected other than by the
-    --reject-below threshold) and any with a deep line-imaging unit attached.
-    Pending and threshold-rejected detections are reproducible and are not
-    returned.
+    Those carrying a human review (confirmed, rejected other than by the
+    --reject-below threshold, or a morphology tag) and any with a deep line-imaging
+    unit attached. Untagged pending and threshold-rejected detections are
+    reproducible and are not returned.
     """
     return fetch_all(
         conn,
@@ -1037,6 +1037,7 @@ def get_line_admit_detections_blocking_rerun(
         WHERE d.line_admit_unit_id = ?
           AND (
               d.review_status = 'confirmed'
+              OR d.morphology IS NOT NULL
               OR (d.review_status = 'rejected'
                   AND COALESCE(d.reviewed_note, '') NOT LIKE ? || '%')
               OR EXISTS (SELECT 1 FROM line_imaging_unit li
@@ -1112,6 +1113,27 @@ def update_detection_review(
             WHERE line_admit_detection_id=?
             """,
             (review_status, now, note, line_admit_detection_id),
+        )
+
+
+LINE_MORPHOLOGIES = ("compact", "extended", "other")
+
+
+def set_detection_morphology(
+    conn: sqlite3.Connection, line_admit_detection_id: int, morphology: str | None,
+) -> None:
+    """Set (or, with None, clear) the human morphology tag on one detection.
+
+    compact | extended | other; 'other' is treated as extended downstream. The review
+    status and note are left alone: the tag is a separate property of the detection.
+    """
+    if morphology is not None and morphology not in LINE_MORPHOLOGIES:
+        raise ValueError(f"morphology must be one of {LINE_MORPHOLOGIES} or None, not {morphology!r}")
+    now = datetime.now(timezone.utc).isoformat() if morphology is not None else None
+    with transaction(conn):
+        conn.execute(
+            "UPDATE line_admit_detection SET morphology=?, morphology_at=? WHERE line_admit_detection_id=?",
+            (morphology, now, line_admit_detection_id),
         )
 
 

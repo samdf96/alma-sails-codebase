@@ -69,6 +69,28 @@ def offsets(wcs, x, y, centre):
     return dra, ddec
 
 
+def full_frame_mom0(mom0_path, cube_header):
+    """Stage-1 moment 0 on the full cube pixel grid.
+
+    A stage-1 x_range/y_range crop writes a mom0 covering only that box (its CRPIX shifted
+    by the crop offset), while acorns_input.dat and the stage-4 maps use full-cube pixels;
+    the crop is put back in place, NaN outside it.
+    """
+    from astropy.io import fits
+
+    with fits.open(mom0_path) as hd:
+        m = np.squeeze(hd[0].data).astype(float)
+        mh = hd[0].header
+    ny, nx = cube_header["NAXIS2"], cube_header["NAXIS1"]
+    if m.shape == (ny, nx):
+        return m
+    ox = int(round(cube_header["CRPIX1"] - mh["CRPIX1"]))
+    oy = int(round(cube_header["CRPIX2"] - mh["CRPIX2"]))
+    full = np.full((ny, nx), np.nan)
+    full[oy:oy + m.shape[0], ox:ox + m.shape[1]] = m
+    return full
+
+
 def map_extent(wcs, shape, centre):
     ny, nx = shape
     x0, y0 = offsets(wcs, np.array([-0.5]), np.array([-0.5]), centre)
@@ -449,8 +471,9 @@ def write_summary_pdf(conn, scouse_unit_id: int, out_path: Path | None = None,
     stem = cube_stem(str(cube))
     stem_dir = output_dir / stem
 
-    wcs = WCS(fits.getheader(cube)).celestial
-    mom0 = np.squeeze(fits.getdata(stem_dir / "stage_1" / f"{stem}_mom0.fits")).astype(float)
+    cube_header = fits.getheader(cube)
+    wcs = WCS(cube_header).celestial
+    mom0 = full_frame_mom0(stem_dir / "stage_1" / f"{stem}_mom0.fits", cube_header)
     ny, nx = mom0.shape
     if cont_path is None:
         cont_path = find_continuum(conn, source, wcs.pixel_to_world((nx - 1) / 2, (ny - 1) / 2))

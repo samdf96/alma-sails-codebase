@@ -399,6 +399,10 @@ CREATE TABLE line_admit_run_log (
 
 -- One row per line ADMIT identified. review_status is set by
 -- review_line_detections.py: pending | confirmed | rejected.
+-- morphology (review_line_detections.py --morph) is a human-set tag, separate from
+-- the review status: compact | extended | other ('other' is treated as extended
+-- downstream), NULL until tagged. Only a confirmed extended/other detection goes on
+-- to SCOUSE; a compact one is still deep-imaged.
 CREATE TABLE line_admit_detection (
     line_admit_detection_id INTEGER PRIMARY KEY AUTOINCREMENT,
     line_admit_unit_id      INTEGER NOT NULL REFERENCES line_admit_unit(line_admit_unit_id),
@@ -415,7 +419,9 @@ CREATE TABLE line_admit_detection (
     blend_id                INTEGER,
     review_status           TEXT NOT NULL DEFAULT 'pending',
     reviewed_at             TEXT,
-    reviewed_note           TEXT
+    reviewed_note           TEXT,
+    morphology              TEXT CHECK (morphology IN ('compact', 'extended', 'other')),
+    morphology_at           TEXT
 );
 
 -- ============================================================
@@ -487,12 +493,17 @@ CREATE TABLE scouse_unit (
     cube_fits_path  TEXT NOT NULL,
     output_dir      TEXT NOT NULL,
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    line_admit_detection_id INTEGER REFERENCES line_admit_detection(line_admit_detection_id),  -- the detection prep was run for
     UNIQUE(source_name, line_label)
 );
 
 -- current_state is the last completed stage:
 --   pending | prep_complete | stage1_complete | stage2_complete |
 --   stage3_complete | stage4_complete | complete
+-- or a final state:
+--   no_saas       stage 1 saved no SAAs, so there is nothing to fit;
+--   compact_skip  the detection is tagged compact (reset_scouse.py --mark-compact):
+--                 SCOUSE/ACORNS products deleted, the row kept for the record.
 -- The job_* columns describe the run of the NEXT stage (batch_scouse.py
 -- session or a terminal run); job_status is NULL when nothing is in flight.
 CREATE TABLE scouse_pipeline_state (

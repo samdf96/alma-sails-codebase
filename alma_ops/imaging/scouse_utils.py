@@ -9,6 +9,12 @@ FSM states (in order):
     pending → prep_complete → stage1_complete → stage2_complete →
     stage3_complete → stage4_complete → complete
 
+A stage 1 that saves no SAAs (totalsaas = 0: no SAA box had fillfactor of its pixels above
+mask_below, e.g. a faint or point-like line) ends the unit in the final state 'no_saas'
+instead of stage1_complete, since scousepy's stage 2 cannot run on an empty SAA list.
+batch_scouse.py never launches anything for it. Re-open such a unit with
+manual_scouse_prep.py --force (new mask/vel_range), then stage 1 again.
+
 current_state is always the last completed stage. A run of the next stage is tracked
 in the job_* columns (stage_job): job_status 'submitted' (batch_scouse.py launched a
 headless session), 'running', or 'failed' (failure_count is incremented; the unit stays
@@ -50,6 +56,65 @@ SCOUSE_STAGE_ADVANCES = {
     "1": "stage1_complete", "2": "stage2_complete", "3": "stage3_complete",
     "4": "stage4_complete", "acorns": "complete",
 }
+# Final state of a unit whose stage 1 found no SAAs; it is outside SCOUSE_FSM_ORDER on purpose.
+SCOUSE_NO_SAAS = "no_saas"
+# Final state of a unit whose detection is tagged compact (reset_scouse.py --mark-compact):
+# a compact line cannot show a streamer, so it does not go through SCOUSE + ACORNS.
+SCOUSE_COMPACT_SKIP = "compact_skip"
+SCOUSE_FINAL_STATES = (SCOUSE_NO_SAAS, SCOUSE_COMPACT_SKIP)
+
+
+def morphology_block(det_id: int | None, morphology: str | None,
+                     unit_id: int | None = None) -> str | None:
+    """Why a unit's detection may not go (on) through SCOUSE, or None if it may.
+
+    Only `extended` and `other` detections are fitted; a tag is required, so every unit
+    has had a visual check.
+    """
+    if det_id is None:
+        return "the unit records no detection (line_admit_detection_id is NULL)"
+    if morphology is None:
+        return (f"detection {det_id} has no morphology tag; tag it first "
+                f"(review_line_detections.py --det {det_id} --morph extended|other|compact)")
+    if morphology == "compact":
+        target = f"--unit-id {unit_id}" if unit_id is not None else "--unit-id N"
+        return (f"detection {det_id} is tagged compact, so it skips SCOUSE "
+                f"(reset_scouse.py --mark-compact {target})")
+    return None
+
+
+def unit_morphology(conn, scouse_unit_id: int) -> tuple[int | None, str | None]:
+    """(line_admit_detection_id, morphology) of the detection a unit was prepped from."""
+    row = db.fetch_one(
+        conn,
+        "SELECT su.line_admit_detection_id AS det_id, d.morphology FROM scouse_unit su "
+        "LEFT JOIN line_admit_detection d "
+        "ON d.line_admit_detection_id = su.line_admit_detection_id "
+        "WHERE su.scouse_unit_id=?",
+        (scouse_unit_id,),
+    )
+    return (row["det_id"], row["morphology"]) if row else (None, None)
+
+
+def n_saas(params: dict) -> int:
+    """Number of SAAs stage 1 saved (totalsaas holds one count per SAA size)."""
+    total = params.get("totalsaas")
+    if total is None:
+        return -1          # stage 1 has not recorded it
+    return int(sum(total)) if isinstance(total, (list, tuple)) else int(total)
+
+
+def no_saas_note(params: dict) -> str:
+    """Why a unit has no SAAs, from the stage-1 settings, for the state-transition note."""
+    mask = params.get("mask_below")
+    sigma = params.get("_mask_sigma")
+    if sigma is None and mask is not None and params.get("_rms_jybeam"):
+        sigma = round(mask / params["_rms_jybeam"], 2)
+    mask_txt = f"mask_below={mask}" + (f" ({sigma}σ)" if sigma is not None else "")
+    return (f"stage 1 saved 0 SAAs: {mask_txt}, wsaa={params.get('wsaa')}, "
+            f"fillfactor={params.get('fillfactor')}, vel_range={params.get('vel_range')}")
+
+
 # Stages batch_scouse.py launches as headless sessions; stage 1 stays an interactive GUI.
 SCOUSE_HEADLESS_STAGES = ("2", "3", "4", "acorns")
 
@@ -147,8 +212,13 @@ def register_scouse_unit(
     source_name: str,
     line_label: str,
     cube_fits_path: str,
+    line_admit_detection_id: int | None = None,
 ) -> int:
     """Get or create a scouse_unit row. Returns scouse_unit_id.
+
+    An existing unit is returned unchanged: re-pointing it at another cube or detection
+    is set_scouse_unit_source's job, done only when the unit is actually re-prepped
+    (a skipped prep must not move a unit's cube from under its stage outputs).
 
     Parameters
     ----------
@@ -160,6 +230,8 @@ def register_scouse_unit(
         Transition label (e.g. "HC3N(10-9)").
     cube_fits_path:
         Canonical (/arc/...) path to the final line cube FITS file.
+    line_admit_detection_id:
+        The confirmed detection the unit is prepped for.
     """
     now = datetime.now(timezone.utc).isoformat()
     output_dir = db.to_canonical(str(scouse_output_dir_path(source_name, line_label)))
@@ -170,19 +242,15 @@ def register_scouse_unit(
         (source_name, line_label),
     )
     if existing is not None:
-        unit_id = existing["scouse_unit_id"]
-        conn.execute(
-            "UPDATE scouse_unit SET cube_fits_path=?, output_dir=? WHERE scouse_unit_id=?",
-            (cube_fits_path, output_dir, unit_id),
-        )
-        return unit_id
+        return existing["scouse_unit_id"]
 
     cur = conn.execute(
         """
-        INSERT INTO scouse_unit (source_name, line_label, cube_fits_path, output_dir, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO scouse_unit (source_name, line_label, cube_fits_path, output_dir, created_at,
+                                 line_admit_detection_id)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (source_name, line_label, cube_fits_path, output_dir, now),
+        (source_name, line_label, cube_fits_path, output_dir, now, line_admit_detection_id),
     )
     unit_id = cur.lastrowid
 
@@ -195,6 +263,15 @@ def register_scouse_unit(
         (unit_id, source_name, line_label, now),
     )
     return unit_id
+
+
+def set_scouse_unit_source(conn, unit_id: int, cube_fits_path: str,
+                           line_admit_detection_id: int | None) -> None:
+    """Point a unit at the cube and detection it is being (re-)prepped from."""
+    conn.execute(
+        "UPDATE scouse_unit SET cube_fits_path=?, line_admit_detection_id=? WHERE scouse_unit_id=?",
+        (cube_fits_path, line_admit_detection_id, unit_id),
+    )
 
 
 def get_scouse_state(conn, source_name: str, line_label: str):
@@ -238,7 +315,8 @@ def add_stage_args(parser: argparse.ArgumentParser) -> None:
 def load_stage_unit(args, stage: str):
     """Look up the unit a stage script was pointed at and check it is ready for `stage`.
 
-    Exits with an [ERROR] if the unit is missing or not in the state the stage needs.
+    Exits with an [ERROR] if the unit is missing, not in the state the stage needs, or
+    its detection is untagged or tagged compact (morphology_block).
     For a batch job the mismatch is also recorded as a failed job, since nobody is
     watching that session's output.
     """
@@ -259,6 +337,13 @@ def load_stage_unit(args, stage: str):
             if args.batch_job:
                 fail_scouse_job(conn, row["scouse_unit_id"], stage, msg)
             print(f"[ERROR] {row['source_name']} / {row['line_label']}: {msg}.")
+            sys.exit(1)
+        block = morphology_block(*unit_morphology(conn, row["scouse_unit_id"]),
+                                 unit_id=row["scouse_unit_id"])
+        if block:
+            if args.batch_job:
+                fail_scouse_job(conn, row["scouse_unit_id"], stage, block)
+            print(f"[ERROR] {row['source_name']} / {row['line_label']}: {block}.")
             sys.exit(1)
     return row
 

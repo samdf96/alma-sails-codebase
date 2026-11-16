@@ -64,6 +64,21 @@ Velocities are LSRK radio, relative to the detection's own rest frequency.
         # An override applies to the next deep-imaging run only. A detection that
         # is already imaged needs manual_line_imaging.py / batch_line_imaging.py
         # --force to pick it up.
+
+Morphology tags (line_admit_detection.morphology): compact | extended | other, set by hand
+after looking at the detection, separate from the review status. 'other' is treated as
+extended downstream (for when "extended" is the wrong word). Only a confirmed
+extended/other detection goes on to SCOUSE; a compact one is still deep-imaged.
+
+    python3 review_line_detections.py --confirm 6097 --morph compact --note "small compact point source"
+    python3 review_line_detections.py --det 6097 6115 --morph compact     # tag only; status/note unchanged
+    python3 review_line_detections.py --clear-morph 6097                  # back to untagged
+    python3 review_line_detections.py --morph-file proposals.csv [--dry-run]
+        # CSV with columns det and accepted (any others are ignored). Only rows whose
+        # 'accepted' is filled in are written; blank rows are skipped and counted. All
+        # rows are validated before any is written.
+    python3 review_line_detections.py --status confirmed --filter-morph untagged
+        # list by tag: compact | extended | other | untagged
 """
 
 from __future__ import annotations
@@ -80,7 +95,7 @@ from alma_ops import db
 from alma_ops.config import DB_PATH
 from alma_ops.imaging.species_shorthand import shorthand_for
 
-SEP = "-" * 165
+SEP = "-" * 174
 C_KMS = 299_792.458
 
 
@@ -90,7 +105,7 @@ def _print_detections(rows) -> None:
         return
     print(f"  {'id':>5} {'mous_id':22} {'source':20} {'spw':>3} {'species':20} {'shorthand':11} "
           f"{'transition':24} {'freq(GHz)':>10} {'vel(km/s)':>9} {'peakrms':>9} {'chan range':>14} "
-          f"{'blend':>6} {'status':10}")
+          f"{'blend':>6} {'status':10} {'morph':8}")
     print("  " + SEP)
     for r in rows:
         species = r['species_name'] or r['formula'] or ''
@@ -103,7 +118,7 @@ def _print_detections(rows) -> None:
         print(f"  {r['line_admit_detection_id']:>5} {r['mous_id']:22.22} {r['target_name']:20.20} {r['spw_idx']:>3} "
               f"{species:20.20} {shorthand:11.11} "
               f"{transition:24.24} {r['frequency_ghz']:>10.4f} {vel_str} {r['peakrms_sigma']:>9.2f} "
-              f"{chan_str:>14} {r['blend_id']:>6} {r['review_status']:10}")
+              f"{chan_str:>14} {r['blend_id']:>6} {r['review_status']:10} {r['morphology'] or '—':8}")
 
 
 def _sort_by_chanrange(rows):
@@ -273,6 +288,89 @@ def _apply_review(conn, values, review_status: str, note: str | None) -> None:
     print(summary)
 
 
+def _scouse_unit_note(conn, det_id: int) -> str:
+    """Where a detection's SCOUSE unit stands, if it has one, so a tag change is not silent."""
+    unit = db.fetch_one(
+        conn,
+        "SELECT u.scouse_unit_id, s.current_state FROM scouse_unit u "
+        "JOIN scouse_pipeline_state s USING (scouse_unit_id) WHERE u.line_admit_detection_id=?",
+        (det_id,),
+    )
+    if unit is None:
+        return ""
+    return f"  (SCOUSE unit {unit['scouse_unit_id']}: {unit['current_state']})"
+
+
+def _apply_morphology(conn, entries, dry_run: bool) -> None:
+    """Set the morphology tag for each (det, morphology-or-None) entry.
+
+    All-or-nothing like _apply_review: every id is checked before anything is written.
+    """
+    rows, missing = {}, []
+    for det_id, _ in entries:
+        row = db.get_line_admit_detection(conn, det_id)
+        if row is None:
+            missing.append(det_id)
+        else:
+            rows[det_id] = row
+    if missing:
+        print(f"[ERROR] No detection with id: {', '.join(str(m) for m in missing)}")
+        print("        Nothing was written -- fix the id(s) and re-run.")
+        sys.exit(1)
+
+    tag = "[DRY RUN] " if dry_run else ""
+    changed = unchanged = 0
+    for det_id, morph in entries:
+        row = rows[det_id]
+        shorthand = shorthand_for(row["species_name"], row["frequency_ghz"]) or row["formula"] or "?"
+        was, now = row["morphology"] or "untagged", morph or "untagged"
+        if was == now:
+            print(f"  [SKIP] {det_id:>6}  {shorthand:<16} already {now}")
+            unchanged += 1
+            continue
+        warn = "" if row["review_status"] == "confirmed" else f"  [{row['review_status']}: not used until confirmed]"
+        print(f"  {tag}[OK]   {det_id:>6}  {shorthand:<16} {was} → {now}{warn}{_scouse_unit_note(conn, det_id)}")
+        if not dry_run:
+            db.set_detection_morphology(conn, det_id, morph)
+        changed += 1
+    print(f"{tag}[OK] {changed} tag(s) {'would be ' if dry_run else ''}changed"
+          + (f"; {unchanged} unchanged" if unchanged else ""))
+
+
+def _read_morph_file(path: str) -> tuple[list[tuple], int]:
+    """(det, morphology) for every row with 'accepted' filled in, and the count left blank."""
+    entries, blank, errors = [], 0, []
+    with open(path, newline="") as fh:
+        reader = csv.DictReader(fh)
+        if not reader.fieldnames or "det" not in reader.fieldnames or "accepted" not in reader.fieldnames:
+            print(f"[ERROR] {path}: needs columns 'det' and 'accepted' (found {reader.fieldnames})")
+            sys.exit(1)
+        for i, rec in enumerate(reader, start=2):
+            value = (rec["accepted"] or "").strip().lower()
+            if not value:
+                blank += 1
+                continue
+            try:
+                det_id = int(rec["det"])
+            except (TypeError, ValueError):
+                errors.append(f"line {i}: det {rec['det']!r} is not an id")
+                continue
+            if value not in db.LINE_MORPHOLOGIES:
+                errors.append(f"line {i} (det {det_id}): accepted {value!r} is not one of "
+                              f"{', '.join(db.LINE_MORPHOLOGIES)}")
+                continue
+            entries.append((det_id, value))
+    dupes = sorted({d for d, _ in entries if sum(1 for e, _ in entries if e == d) > 1})
+    if dupes:
+        errors.append(f"det listed more than once: {', '.join(str(d) for d in dupes)}")
+    if errors:
+        for e in errors:
+            print(f"[ERROR] {path} {e}")
+        print("        Nothing was written -- fix the file and re-run.")
+        sys.exit(1)
+    return entries, blank
+
+
 def _window_context(conn, det_row) -> str:
     """One line on where the current deep-imaging window sits, for comparison.
 
@@ -381,13 +479,25 @@ def main() -> None:
                          help="One or more detection ids, space- and/or comma-separated")
     parser.add_argument("--reject", nargs="+", default=None, metavar="DETECTION_ID",
                          help="One or more detection ids, space- and/or comma-separated")
+    parser.add_argument("--morph", default=None, choices=list(db.LINE_MORPHOLOGIES),
+                         help="Set the morphology tag: with --confirm/--reject on those ids "
+                              "(also when the status is unchanged), or with --det alone to tag "
+                              "without touching status or note")
+    parser.add_argument("--clear-morph", nargs="+", default=None, metavar="DETECTION_ID",
+                         help="Reset morphology tags to untagged, space- and/or comma-separated")
+    parser.add_argument("--morph-file", default=None, metavar="CSV",
+                         help="Set tags from a CSV with columns det,accepted; rows with a blank "
+                              "'accepted' are skipped")
+    parser.add_argument("--filter-morph", default=None,
+                         choices=list(db.LINE_MORPHOLOGIES) + ["untagged"],
+                         help="When listing, show only detections with this tag")
     parser.add_argument("--note", default=None,
                          help="Optional note for --confirm/--reject/--set-window; applied to every id given")
     parser.add_argument("--reject-below", type=float, default=None, metavar="SIGMA",
                          help="Bulk-reject all pending detections with peakrms_sigma below SIGMA")
     parser.add_argument("--dry-run", action="store_true",
-                         help="With --reject-below/--set-window/--windows-file: show what would "
-                              "be written without writing")
+                         help="With --reject-below/--set-window/--windows-file/--morph/"
+                              "--clear-morph/--morph-file: show what would be written without writing")
     parser.add_argument("--set-window", type=int, default=None, metavar="DETECTION_ID",
                          help="Set a deep-imaging velocity window override (needs --vmin/--vmax)")
     parser.add_argument("--vmin", type=float, default=None, metavar="KMS",
@@ -423,6 +533,28 @@ def main() -> None:
 
     conn = db.get_connection(args.db_path)
 
+    if args.morph is not None and args.confirm is None and args.reject is None and args.det is None:
+        print("[ERROR] --morph needs --confirm, --reject or --det to say which detections to tag")
+        conn.close()
+        sys.exit(1)
+
+    if args.morph_file is not None:
+        entries, blank = _read_morph_file(args.morph_file)
+        print(f"{args.morph_file}: {len(entries)} accepted row(s), {blank} left blank (skipped)")
+        _apply_morphology(conn, entries, args.dry_run)
+        conn.close()
+        return
+
+    if args.clear_morph is not None:
+        _apply_morphology(conn, [(d, None) for d in _parse_detection_ids(args.clear_morph)], args.dry_run)
+        conn.close()
+        return
+
+    if args.morph is not None and args.confirm is None and args.reject is None:
+        _apply_morphology(conn, [(d, args.morph) for d in _parse_detection_ids(args.det)], args.dry_run)
+        conn.close()
+        return
+
     if args.set_window is not None:
         if args.vmin is None or args.vmax is None:
             print("[ERROR] --set-window needs --vmin and --vmax")
@@ -451,15 +583,18 @@ def main() -> None:
         conn.close()
         return
 
-    if args.confirm is not None:
-        _apply_review(conn, args.confirm, "confirmed", args.note)
-        conn.close()
-        return
-
-    if args.reject is not None:
-        _apply_review(conn, args.reject, "rejected", args.note)
-        conn.close()
-        return
+    for ids, status in ((args.confirm, "confirmed"), (args.reject, "rejected")):
+        if ids is not None:
+            if args.dry_run and args.morph is not None:
+                print("[ERROR] --dry-run with --confirm/--reject is not supported; "
+                      "preview the tag alone with --det ... --morph ... --dry-run")
+                conn.close()
+                sys.exit(1)
+            _apply_review(conn, ids, status, args.note)
+            if args.morph is not None:
+                _apply_morphology(conn, [(d, args.morph) for d in _parse_detection_ids(ids)], False)
+            conn.close()
+            return
 
     if args.reject_below is not None:
         candidates = db.get_line_admit_detections(conn, review_status="pending")
@@ -545,6 +680,10 @@ def main() -> None:
     if args.species is not None:
         target = args.species.split("(")[0].upper()
         rows = [r for r in rows if (shorthand_for(r["species_name"], r["frequency_ghz"]) or "").split("(")[0].upper() == target]
+
+    if args.filter_morph is not None:
+        want = None if args.filter_morph == "untagged" else args.filter_morph
+        rows = [r for r in rows if r["morphology"] == want]
 
     if args.peakrms_min is not None:
         rows = [r for r in rows if r["peakrms_sigma"] >= args.peakrms_min]

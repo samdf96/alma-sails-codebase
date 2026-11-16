@@ -47,6 +47,12 @@ the unit over at prep_complete, deleting its cluster rows, its acorns_input.dat 
 stage_1-4 and acorns_output directories (scousepy would otherwise load the old
 sN.scousepy files and skip fitting). The scousepy.config and the summary PDF are kept.
 
+Only a detection tagged `extended` or `other` (line_admit_detection.morphology, set with
+review_line_detections.py --morph) is prepped: an untagged one is an [ERROR] (look at it and
+tag it first), a `compact` one is a [SKIP], since a compact line cannot show a streamer.
+--force also re-opens a final-state unit (no_saas, or compact_skip once its tag has been
+changed away from compact).
+
 The line_label is the detection's isotopologue plus its transition without
 hyperfine numbers, e.g. "HC3N(10-9)", "13CS(2-1)".  Override with --line-label if needed.
 """
@@ -76,6 +82,7 @@ from alma_ops.imaging.scouse_utils import (
     register_scouse_unit,
     scouse_connection,
     scouse_output_dir_path,
+    set_scouse_unit_source,
     update_scouse_parameters,
 )
 
@@ -359,6 +366,15 @@ def main() -> None:
         if det_row is None:
             print(f"[ERROR] No detection with id={args.detection_id}")
             sys.exit(1)
+        if det_row["morphology"] is None:
+            print(f"[ERROR] detection {args.detection_id} has no morphology tag; look at it and "
+                  f"tag it first: review_line_detections.py --det {args.detection_id} "
+                  f"--morph extended|other|compact")
+            sys.exit(1)
+        if det_row["morphology"] == "compact":
+            print(f"[SKIP] detection {args.detection_id} is tagged compact; compact lines skip "
+                  f"SCOUSE + ACORNS")
+            return
 
         # Get the imaging product for this detection
         lip_row = db.fetch_one(
@@ -402,7 +418,8 @@ def main() -> None:
 
     with scouse_connection(args.db_path) as conn:
         # Register unit
-        unit_id = register_scouse_unit(conn, source_name, line_label, cube_canonical)
+        unit_id = register_scouse_unit(conn, source_name, line_label, cube_canonical,
+                                       line_admit_detection_id=args.detection_id)
 
         state_row = db.fetch_one(
             conn,
@@ -437,6 +454,7 @@ def main() -> None:
                 if stale.exists():
                     shutil.rmtree(stale)
                     print(f"  removed stale {stale}")
+        set_scouse_unit_source(conn, unit_id, cube_canonical, args.detection_id)
         update_scouse_parameters(conn, unit_id, params)
         clear_scouse_job(conn, unit_id)   # a failed job of the old run must not block the new one
 
